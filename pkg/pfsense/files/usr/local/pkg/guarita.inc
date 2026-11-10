@@ -70,6 +70,48 @@ function guarita_valid_table_name($name) {
 	return (bool) preg_match('/^[a-zA-Z0-9_]{1,24}$/', $name);
 }
 
+/*
+ * guarita_lookup_ca_cert() devolve o certificado da CA (PEM) a partir do refid,
+ * ou string vazia se não achar.
+ *
+ * Existe porque lookup_ca() mudou de forma entre versões do pfSense:
+ *
+ *   2.7.x:  function & lookup_ca($refid)   devolve o array da CA, ou false
+ *   2.8.x:  function   lookup_ca($refid)   devolve ['idx' => .., 'item' => ..]
+ *
+ * Ler só $ca['item']['crt'] funciona no 2.8 e falha calado no 2.7: a CA
+ * configurada pelo administrador seria ignorada e a conexão LDAP terminaria
+ * sem validar a cadeia, sem nada no log dizendo isso. Por isso aqui tratamos
+ * as duas formas e registramos um aviso quando o refid existe mas o
+ * certificado não pôde ser lido.
+ */
+function guarita_lookup_ca_cert($refid) {
+	if (empty($refid)) {
+		return '';
+	}
+	$ca = lookup_ca($refid);
+	if (empty($ca)) {
+		log_error(sprintf("Guarita: a CA %s não foi encontrada no pfSense; " .
+			"a conexão LDAP não vai validar a cadeia do certificado.", $refid));
+		return '';
+	}
+	/* Formato do 2.8.x em diante. */
+	if (is_array($ca) && array_key_exists('item', $ca)) {
+		$ca = $ca['item'];
+	}
+	if (!is_array($ca) || empty($ca['crt'])) {
+		log_error(sprintf("Guarita: não consegui ler o certificado da CA %s; " .
+			"a conexão LDAP não vai validar a cadeia do certificado.", $refid));
+		return '';
+	}
+	$pem = base64_decode($ca['crt']);
+	if (($pem === false) || (strpos($pem, 'BEGIN CERTIFICATE') === false)) {
+		log_error(sprintf("Guarita: o certificado da CA %s não é um PEM válido.", $refid));
+		return '';
+	}
+	return $pem;
+}
+
 /* Gera um segredo novo para os agentes. */
 function guarita_generate_secret() {
 	// 32 bytes em base64 url-safe, sem padding: 43 caracteres.
@@ -138,10 +180,7 @@ function guarita_write_config() {
 
 			/* CA do servidor LDAP, se houver. */
 			if (!empty($auth['ldap_caref']) && ($auth['ldap_caref'] != 'global')) {
-				$ca = lookup_ca($auth['ldap_caref']);
-				if (!empty($ca['item']['crt'])) {
-					$ldap['ca_cert'] = base64_decode($ca['item']['crt']);
-				}
+				$ldap['ca_cert'] = guarita_lookup_ca_cert($auth['ldap_caref']);
 			}
 			if (!empty($auth['ldap_timeout'])) {
 				$ldap['timeout'] = (int) $auth['ldap_timeout'];
@@ -236,38 +275,65 @@ function guarita_sync_aliases() {
 		$wanted[$name] = true;
 		$file = guarita_table_file($g['table']);
 
-		/* Garante que o arquivo existe, mesmo vazio: sem ele o pf recusa a
-		 * tabela e a regra que a usa falha ao carregar. */
+		/* Garante que o arquivo de IPs existe, mesmo vazio, para o daemon poder
+		 * aplicá-lo logo na primeira sincronização. */
 		if (!file_exists($file)) {
 			safe_mkdir(GUARITA_TABLEDIR, 0750);
 			@file_put_contents($file, '');
 		}
 
-		$descr = sprintf(gettext('Guarita: IPs do grupo %s (atualizado pelo serviço)'),
+		$descr = sprintf(gettext('Guarita: grupo %s (conteúdo gerenciado pelo serviço)'),
 			!empty($g['name']) ? $g['name'] : $g['table']);
 
+		/*
+		 * Tipo "host" com a lista de endereços VAZIA, de propósito.
+		 *
+		 * filter_generate_alias_tables() trata esse caso assim:
+		 *
+		 *     if (empty($tableaddrs)) {
+		 *         $aliases .= "table <nome> persist\n";
+		 *
+		 * ou seja, a tabela nasce no ruleset como "persist" e passa a existir
+		 * sempre, mesmo sem nenhum membro. É isso que queremos: o alias fica
+		 * selecionável nas regras, a tabela nunca falta, e quem manda no
+		 * conteúdo é o daemon, via "pfctl -t <nome> -T replace -f <arquivo>".
+		 * Assim um logon muda a política na hora, sem reescrever o config.xml
+		 * nem recarregar o filtro.
+		 *
+		 * O tipo "urltable" NÃO serve aqui: alias_expand_urltable() exige que
+		 * o campo url seja uma URL HTTP de verdade e devolve null para um
+		 * caminho local, e nesse caso o pfSense não emite tabela nenhuma.
+		 *
+		 * Como a lista fica vazia, o pfSense agenda um "pfctl -T flush" depois
+		 * de cada recarga de filtro. Quem repõe o conteúdo é o daemon, que
+		 * observa o /tmp/rules.debug e reaplica.
+		 */
 		$found = false;
 		foreach ($aliases as $idx => $a) {
 			if ($a['name'] !== $name) {
 				continue;
 			}
 			$found = true;
-			if (($a['type'] !== 'urltable') || ($a['url'] !== $file) || ($a['descr'] !== $descr)) {
-				$aliases[$idx]['type']        = 'urltable';
-				$aliases[$idx]['url']         = $file;
-				$aliases[$idx]['updatefreq']  = '1';
-				$aliases[$idx]['descr']       = $descr;
+			if (($a['type'] !== 'host') || ($a['address'] !== '') ||
+			    ($a['descr'] !== $descr) || !empty($a['url'])) {
+				$aliases[$idx]['type']    = 'host';
+				$aliases[$idx]['address'] = '';
+				$aliases[$idx]['detail']  = '';
+				$aliases[$idx]['descr']   = $descr;
+				/* Restos de uma versão anterior que usava urltable. */
+				unset($aliases[$idx]['url']);
+				unset($aliases[$idx]['updatefreq']);
 				$changed = true;
 			}
 			break;
 		}
 		if (!$found) {
 			$aliases[] = array(
-				'name'       => $name,
-				'type'       => 'urltable',
-				'url'        => $file,
-				'updatefreq' => '1',
-				'descr'      => $descr,
+				'name'    => $name,
+				'type'    => 'host',
+				'address' => '',
+				'detail'  => '',
+				'descr'   => $descr,
 			);
 			$changed = true;
 		}

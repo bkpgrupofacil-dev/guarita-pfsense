@@ -202,10 +202,11 @@ func (d *daemon) start() error {
 	d.log.Printf("API local escutando em %s", cfg.ListenLocal)
 
 	// Laços de manutenção.
-	d.wg.Add(3)
+	d.wg.Add(4)
 	go d.syncLoop()
 	go d.maintenanceLoop()
 	go d.refreshLoop()
+	go d.filterWatchLoop()
 
 	// Escreve as tabelas já no boot, a partir do estado carregado do disco.
 	d.requestSync()
@@ -297,6 +298,82 @@ func (d *daemon) doSync() {
 			total += len(ips)
 		}
 		d.log.Printf("tabelas sincronizadas: %d grupo(s), %d entrada(s)", len(cfg.Groups), total)
+	}
+}
+
+// filterWatchLoop repõe o conteúdo das tabelas depois que o pfSense recarrega
+// o filtro, e periodicamente como rede de segurança.
+//
+// Por que é necessário: os aliases do Guarita são do tipo "host" com a lista de
+// endereços vazia, e para esse caso o pfSense emite "table <nome> persist" e
+// agenda um "pfctl -T flush -t <nome>" para rodar DEPOIS do filter_configure.
+// Ou seja, qualquer alteração de configuração no firewall esvazia as nossas
+// tabelas, e quem tem o conteúdo de verdade é este serviço.
+//
+// Há uma corrida: o flush acontece depois da recarga, então reaplicar no
+// instante em que notamos a mudança do arquivo de regras pode ser cedo demais e
+// o flush apagaria o que acabamos de pôr. Por isso reaplicamos algumas vezes,
+// espaçadas, e mantemos a reaplicação periódica.
+func (d *daemon) filterWatchLoop() {
+	defer d.wg.Done()
+
+	cfg := d.snapshotCfg()
+	var lastMod time.Time
+	if cfg.RulesFile != "" {
+		if fi, err := os.Stat(cfg.RulesFile); err == nil {
+			lastMod = fi.ModTime()
+		}
+	}
+
+	check := time.NewTicker(5 * time.Second)
+	defer check.Stop()
+
+	var periodic <-chan time.Time
+	if cfg.ReapplyInterval.D() > 0 {
+		t := time.NewTicker(cfg.ReapplyInterval.D())
+		defer t.Stop()
+		periodic = t.C
+	}
+
+	for {
+		select {
+		case <-d.ctx.Done():
+			return
+
+		case <-check.C:
+			cfg = d.snapshotCfg()
+			if cfg.RulesFile == "" {
+				continue
+			}
+			fi, err := os.Stat(cfg.RulesFile)
+			if err != nil {
+				continue
+			}
+			if fi.ModTime().Equal(lastMod) {
+				continue
+			}
+			lastMod = fi.ModTime()
+			d.log.Printf("o filtro do pfSense foi recarregado; repondo as tabelas")
+			// Reaplica algumas vezes para passar por cima do flush que o
+			// pfSense agenda depois da recarga, qualquer que seja a ordem.
+			go d.reapplyAfterReload()
+
+		case <-periodic:
+			d.requestSync()
+		}
+	}
+}
+
+// reapplyAfterReload reaplica as tabelas em alguns instantes depois de uma
+// recarga de filtro.
+func (d *daemon) reapplyAfterReload() {
+	for _, delay := range []time.Duration{2 * time.Second, 6 * time.Second, 15 * time.Second} {
+		select {
+		case <-d.ctx.Done():
+			return
+		case <-time.After(delay):
+			d.requestSync()
+		}
 	}
 }
 

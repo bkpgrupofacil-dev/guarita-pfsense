@@ -217,8 +217,11 @@ Os nomes de grupo cadastrados não casam com o que o AD devolve. Use o teste na
 aba **Status**. Lembre que grupos de escopo "Domínio Local" podem não aparecer.
 
 **O status mostra "sem tabela" num grupo.**
-Normal até existir uma regra de firewall usando aquele alias: o pf só cria a
-tabela quando ela é referenciada por uma regra. Crie a regra e o aviso sai.
+Isso não é normal e vale investigar. O alias de cada grupo é criado com a lista
+vazia, o que faz o pfSense declarar a tabela como `persist` — ela existe mesmo
+sem nenhuma regra usando o alias. Se aparecer "sem tabela": confira se o alias
+`guarita_<grupo>` existe em Firewall > Aliases e force uma recarga salvando
+qualquer coisa nas Configurações do Guarita.
 
 ---
 

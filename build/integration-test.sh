@@ -59,6 +59,7 @@ SECRET="segredo-de-integracao-bem-longo-123"
 PORT=18923
 
 mkdir -p "$WORK/tables" "$WORK/db" "$WORK/bin"
+touch "$WORK/rules.debug"
 
 # pfctl falso: registra cada chamada num log e copia o arquivo recebido.
 cat > "$WORK/bin/pfctl" <<'FAKE'
@@ -93,6 +94,8 @@ cat > "$WORK/guarita.json" <<JSON
   "state_path": "$WORK/db/sessions.json",
   "table_dir": "$WORK/tables",
   "default_group": "padrao",
+  "rules_file": "$WORK/rules.debug",
+  "reapply_interval": "3600s",
   "debug": true,
   "ldap": { "host": "" },
   "groups": [
@@ -330,6 +333,36 @@ check "segredo novo aceito depois do SIGHUP" "200" "$(echo "$OUT" | head -1)"
 NSESS=$(python3 -I "$WORK/local.py" "$WORK/guarita.sock" /status | \
 	python3 -I -c 'import json,sys; print(json.load(sys.stdin)["sessions"])')
 check "sessões preservadas no SIGHUP" "2" "$NSESS"
+
+info "8. reposicao das tabelas depois de uma recarga de filtro do pfSense"
+
+# O pfSense emite "table <nome> persist" para alias com lista vazia e agenda um
+# "pfctl -T flush" DEPOIS do filter_configure. Simulamos isso: esvaziamos a
+# tabela por fora e tocamos o arquivo de regras, como o pfSense faz. O daemon
+# tem de notar e repor o conteudo sozinho.
+BEFORE=$(grep -c . "$WORK/tables/padrao.txt")
+: > "$WORK/tables/padrao.txt"          # como se o pfctl -T flush tivesse rodado
+check "tabela esvaziada para o teste" "0" "$(grep -c . "$WORK/tables/padrao.txt")"
+
+touch "$WORK/rules.debug"               # pfSense reescreveu o ruleset
+
+# O daemon checa a cada 5s e reaplica em 2s, 6s e 15s. Esperamos ate 30s.
+RESTORED=0
+for _ in $(seq 1 30); do
+	sleep 1
+	if [ "$(grep -c . "$WORK/tables/padrao.txt")" = "$BEFORE" ]; then
+		RESTORED=1
+		break
+	fi
+done
+check "daemon repos a tabela apos a recarga" "1" "$RESTORED"
+check "conteudo reposto com os mesmos IPs" "$BEFORE" "$(grep -c . "$WORK/tables/padrao.txt")"
+
+if grep -q "recarregado" "$WORK/daemon.log"; then
+	ok "a recarga foi registrada no log"
+else
+	bad "o daemon nao registrou a recarga no log"
+fi
 
 # ---------------------------------------------------------------- resultado
 

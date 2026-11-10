@@ -41,6 +41,18 @@ type Config struct {
 	// TableDir é o diretório dos arquivos de tabela pf (um por grupo).
 	TableDir string `json:"table_dir"`
 
+	// RulesFile é o arquivo que o pfSense reescreve a cada recarga de filtro
+	// (normalmente /tmp/rules.debug). O daemon observa a data de modificação
+	// dele para saber que precisa repor o conteúdo das tabelas: um alias com
+	// lista vazia faz o pfSense agendar "pfctl -T flush" após cada recarga.
+	// Vazio desliga a observação.
+	RulesFile string `json:"rules_file"`
+
+	// ReapplyInterval é o intervalo da reaplicação periódica das tabelas, como
+	// rede de segurança para qualquer coisa que as esvazie sem passar pelo
+	// arquivo de regras. Zero desliga.
+	ReapplyInterval Duration `json:"reapply_interval"`
+
 	// DefaultGroup é o nome lógico do grupo aplicado a IPs sem usuário
 	// identificado (ex.: "nao_autenticado"). Pode ficar vazio.
 	DefaultGroup string `json:"default_group"`
@@ -156,6 +168,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TableDir == "" {
 		c.TableDir = "/var/db/guarita/tables"
+	}
+	if c.RulesFile == "" {
+		c.RulesFile = "/tmp/rules.debug"
+	}
+	if c.ReapplyInterval == 0 {
+		c.ReapplyInterval = Duration(60 * time.Second)
 	}
 	if c.LogFacility == "" {
 		c.LogFacility = "local5"

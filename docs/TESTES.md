@@ -176,8 +176,14 @@ cat /var/db/guarita/tables/<nome curto do grupo>.txt
 pfctl -t guarita_<nome curto> -T show
 ```
 
-Se der `table does not exist`, é esperado **até** existir uma regra de firewall
-usando o alias daquele grupo. Crie a regra (passo 7) e teste de novo.
+**Resultado esperado:** a tabela existe e lista o IP, mesmo que você ainda não
+tenha criado nenhuma regra usando o alias. O alias é criado com a lista vazia, e
+nesse caso o pfSense declara a tabela como `persist`, então ela existe desde o
+começo.
+
+Se der `table does not exist`, algo falhou: confira se o alias
+`guarita_<grupo>` aparece em **Firewall > Aliases** e salve as Configurações do
+Guarita de novo, para forçar uma recarga do filtro.
 
 Em **Services > Guarita > Status**, as colunas *IPs (serviço)* e *IPs (pf)*
 devem bater.

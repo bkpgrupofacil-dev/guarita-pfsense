@@ -154,8 +154,9 @@ if (empty($settings['enable'])) {
 						<?= htmlspecialchars($status['last_sync_error']) ?>
 					</span>
 					<br><small class="text-muted">
-						<?= gettext('Erro de "table does not exist" é normal até existir uma regra de ' .
-						            'firewall usando o alias do grupo. Crie a regra e o erro desaparece.') ?>
+						<?= gettext('Se o erro for "table does not exist", confira se o alias do grupo ' .
+						            'existe em Firewall > Aliases e salve as Configurações de novo para ' .
+						            'forçar uma recarga do filtro.') ?>
 					</small>
 				<?php endif ?>
 			</dd>
@@ -190,7 +191,7 @@ if (empty($settings['enable'])) {
 					<td><?= $insvc ?></td>
 					<td>
 						<?php if ($pfcount === null): ?>
-							<span class="label label-warning" title="<?= gettext('A tabela ainda não existe no firewall') ?>">
+							<span class="label label-danger" title="<?= gettext('A tabela não existe no firewall; o alias pode não ter sido criado') ?>">
 								<?= gettext("sem tabela") ?>
 							</span>
 						<?php elseif ($pfcount !== $insvc): ?>
@@ -287,10 +288,14 @@ if (empty($settings['enable'])) {
 
 <div class="infoblock">
 <?php print_info_box(
-	gettext('As colunas <b>IPs (serviço)</b> e <b>IPs (pf)</b> devem bater. ' .
-	        'Se a coluna do pf mostrar "sem tabela", é porque ainda não existe nenhuma ' .
-	        'regra de firewall usando o alias daquele grupo: o pf só cria a tabela quando ' .
-	        'ela é referenciada por uma regra.') .
+	gettext('As colunas <b>IPs (serviço)</b> e <b>IPs (pf)</b> devem bater. A tabela de ' .
+	        'cada grupo é declarada como "persist" no firewall, então existe desde que o ' .
+	        'alias exista — não é preciso ter regra usando ela. "sem tabela" indica ' .
+	        'problema, não situação normal.') .
+	'<br><br>' .
+	gettext('Cada recarga de filtro do pfSense esvazia essas tabelas, e o serviço as ' .
+	        'repõe automaticamente em alguns segundos. Uma divergência momentânea logo ' .
+	        'após salvar uma configuração é esperada.') .
 	'<br><br>' .
 	gettext('Logs do serviço: ') .
 	'<a href="/status_logs_packages.php?pkg=guarita.log" class="alert-link">' .
