@@ -187,6 +187,41 @@ completos em [docs/REGRAS.md](docs/REGRAS.md).
 
 ---
 
+## Atualizações do pfSense: o Guarita é removido
+
+**Toda atualização de versão do pfSense remove o Guarita.** O script de upgrade
+da Netgate (`pfSense-upgrade`) faz isto com cada pacote `pfSense-pkg-*`:
+
+```sh
+# Remove packages removed from remote repo
+_pkg rquery -U -r ${product} %v ${_package} >/dev/null && continue
+_exec "_pkg set -A 1 ${_package}" "Scheduling package ${_package} for removal"
+...
+_exec "_pkg autoremove" "Removing unnecessary packages"
+```
+
+Ou seja: o que não está no repositório oficial da Netgate é marcado como
+automático e removido. O Guarita não está lá.
+
+**O que sobrevive à remoção:** as configurações, os grupos e o segredo dos
+agentes ficam no `config.xml` (a remoção apaga só o registro do pacote). Os
+aliases que alguma regra usa também ficam, para o firewall continuar
+carregando as regras.
+
+**O que para de funcionar:** o serviço some e esses aliases ficam **vazios**.
+As regras que usam `guarita_<grupo>` passam a não casar com ninguém, e o tráfego
+desses usuários cai na regra genérica da LAN. Conforme essa regra, usuários
+restritos podem ganhar acesso livre, ou todo mundo pode perder o acesso.
+
+**O que fazer:**
+
+- **Antes da primeira instalação**, atualize o pfSense para a versão que vai
+  usar e só depois instale o Guarita.
+- **Depois de cada atualização**, rode o `install.sh` de novo. Tudo volta com as
+  mesmas configurações, e os agentes dos DCs reconectam sozinhos, porque o
+  segredo é o mesmo.
+- Guarde o tarball do Guarita fora do firewall, para ter de onde reinstalar.
+
 ## Verificação
 
 Depois do primeiro logon de um usuário do domínio:
