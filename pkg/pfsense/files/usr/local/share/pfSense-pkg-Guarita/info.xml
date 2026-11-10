@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<pfsensepkgs>
+	<package>
+		<name>Guarita</name>
+		<internal_name>Guarita</internal_name>
+		<descr><![CDATA[Controle de acesso à internet por usuário do Active Directory.
+Identifica qual usuário do AD está atrás de cada IP e mantém uma tabela do
+firewall por grupo, para que as regras valham por usuário e não por endereço.]]></descr>
+		<website>https://github.com/bkpgrupofacil-dev/guarita-pfsense</website>
+		<version>%%PKGVERSION%%</version>
+		<configurationfile>guarita.xml</configurationfile>
+		<logging>
+			<facilityname>local5</facilityname>
+			<logfilename>guarita.log</logfilename>
+		</logging>
+	</package>
+</pfsensepkgs>

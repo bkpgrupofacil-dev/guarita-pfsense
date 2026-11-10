@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+	guaritagroups.xml
+	Lista e edição dos grupos do Guarita.
+
+	Cada grupo cadastrado aqui gera:
+	  - uma tabela no pf chamada guarita_<nome curto>
+	  - um alias de mesmo nome em Firewall > Aliases, que você usa nas regras
+-->
+<packagegui>
+	<copyright><![CDATA[
+Pacote Guarita para pfSense.
+Licenciado sob a Apache License, versão 2.0.
+	]]></copyright>
+	<name>guaritagroups</name>
+	<version>%%PKGVERSION%%</version>
+	<title>Guarita: Grupos</title>
+	<include_file>/usr/local/pkg/guarita.inc</include_file>
+
+	<menu>
+		<name>Guarita: Grupos</name>
+		<section>Services</section>
+		<url>/pkg.php?xml=guaritagroups.xml</url>
+		<visible>false</visible>
+	</menu>
+
+	<tabs>
+		<tab>
+			<text>Configurações</text>
+			<url>/pkg_edit.php?xml=guarita.xml</url>
+		</tab>
+		<tab>
+			<text>Grupos</text>
+			<url>/pkg.php?xml=guaritagroups.xml</url>
+			<active/>
+		</tab>
+		<tab>
+			<text>Sessões</text>
+			<url>/guarita_sessions.php</url>
+		</tab>
+		<tab>
+			<text>Status</text>
+			<url>/guarita_status.php</url>
+		</tab>
+		<tab>
+			<text>Agentes</text>
+			<url>/guarita_agents.php</url>
+		</tab>
+	</tabs>
+
+	<adddeleteeditpagefields>
+		<columnitem>
+			<fielddescr>Nome</fielddescr>
+			<fieldname>name</fieldname>
+		</columnitem>
+		<columnitem>
+			<fielddescr>Nome curto</fielddescr>
+			<fieldname>table</fieldname>
+		</columnitem>
+		<columnitem>
+			<fielddescr>Grupos do AD</fielddescr>
+			<fieldname>ad_groups</fieldname>
+		</columnitem>
+		<columnitem>
+			<fielddescr>Prioridade</fielddescr>
+			<fieldname>priority</fieldname>
+		</columnitem>
+		<columnitem>
+			<fielddescr>Descrição</fielddescr>
+			<fieldname>descr</fieldname>
+		</columnitem>
+	</adddeleteeditpagefields>
+
+	<fields>
+		<field>
+			<fielddescr>Nome</fielddescr>
+			<fieldname>name</fieldname>
+			<description><![CDATA[Nome amigável do grupo, como você quer vê-lo nas
+			telas. Exemplo: "Vendas", "Diretoria", "Acesso restrito".]]></description>
+			<type>input</type>
+			<size>40</size>
+			<required/>
+		</field>
+		<field>
+			<fielddescr>Nome curto</fielddescr>
+			<fieldname>table</fieldname>
+			<description><![CDATA[Identificador usado no firewall. Aceita letras,
+			números e _, com até 24 caracteres.<br/><br/>
+			Ele gera a tabela <b>guarita_&lt;nome curto&gt;</b> e um alias de mesmo nome
+			em <a href="/firewall_aliases.php">Firewall &gt; Aliases</a>. É esse alias
+			que você seleciona como origem nas suas regras.<br/><br/>
+			Exemplo: <b>vendas</b> gera o alias <b>guarita_vendas</b>.<br/>
+			<b>Não mude depois de criar regras</b>: as regras passariam a apontar para um
+			alias que não existe mais.]]></description>
+			<type>input</type>
+			<size>24</size>
+			<required/>
+		</field>
+		<field>
+			<fielddescr>Grupos do Active Directory</fielddescr>
+			<fieldname>ad_groups</fieldname>
+			<description><![CDATA[Um nome de grupo do AD por linha (ou separados por
+			vírgula). Use o nome do grupo (CN), não o caminho completo.<br/><br/>
+			Exemplo:<br/>
+			<code>GG_Vendas<br/>GG_Comercial</code><br/><br/>
+			Quem estiver em qualquer um desses grupos entra neste grupo do Guarita.
+			A comparação ignora maiúsculas e minúsculas.<br/><br/>
+			Use a aba <b>Status</b> para testar um usuário e ver quais grupos o AD
+			devolve para ele.]]></description>
+			<type>textarea</type>
+			<rows>5</rows>
+			<cols>40</cols>
+			<required/>
+		</field>
+		<field>
+			<fielddescr>Prioridade</fielddescr>
+			<fieldname>priority</fieldname>
+			<description><![CDATA[Número inteiro. Quando um usuário se encaixa em mais
+			de um grupo, vale o de <b>menor</b> número.<br/><br/>
+			Use isso para resolver sobreposição: se a Diretoria tem acesso amplo
+			(prioridade 0) e Vendas é restrito (prioridade 10), um diretor que também
+			esteja em Vendas fica com o acesso da Diretoria.<br/><br/>
+			Padrão: 0.]]></description>
+			<type>input</type>
+			<size>8</size>
+			<default_value>0</default_value>
+		</field>
+		<field>
+			<fielddescr>Descrição</fielddescr>
+			<fieldname>descr</fieldname>
+			<description><![CDATA[Anotação livre, só para a sua referência.]]></description>
+			<type>input</type>
+			<size>60</size>
+		</field>
+	</fields>
+
+	<custom_php_validation_command>
+		guarita_validate_group($_POST, $input_errors);
+	</custom_php_validation_command>
+
+	<custom_php_resync_config_command>
+		guarita_resync_config();
+	</custom_php_resync_config_command>
+</packagegui>

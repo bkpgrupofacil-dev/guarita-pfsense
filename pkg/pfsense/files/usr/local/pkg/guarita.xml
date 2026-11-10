@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+	guarita.xml
+	Página de configurações do pacote Guarita.
+-->
+<packagegui>
+	<copyright><![CDATA[
+Pacote Guarita para pfSense.
+Licenciado sob a Apache License, versão 2.0.
+	]]></copyright>
+	<name>Guarita</name>
+	<version>%%PKGVERSION%%</version>
+	<title>Guarita: Configurações</title>
+	<include_file>/usr/local/pkg/guarita.inc</include_file>
+
+	<menu>
+		<name>Guarita</name>
+		<tooltiptext>Controle de acesso por usuário do Active Directory</tooltiptext>
+		<section>Services</section>
+		<url>/pkg_edit.php?xml=guarita.xml</url>
+	</menu>
+
+	<service>
+		<name>guaritad</name>
+		<rcfile>guaritad.sh</rcfile>
+		<executable>guaritad</executable>
+		<description>Guarita: identificação de usuários do AD</description>
+	</service>
+
+	<tabs>
+		<tab>
+			<text>Configurações</text>
+			<url>/pkg_edit.php?xml=guarita.xml</url>
+			<active/>
+		</tab>
+		<tab>
+			<text>Grupos</text>
+			<url>/pkg.php?xml=guaritagroups.xml</url>
+		</tab>
+		<tab>
+			<text>Sessões</text>
+			<url>/guarita_sessions.php</url>
+		</tab>
+		<tab>
+			<text>Status</text>
+			<url>/guarita_status.php</url>
+		</tab>
+		<tab>
+			<text>Agentes</text>
+			<url>/guarita_agents.php</url>
+		</tab>
+	</tabs>
+
+	<fields>
+		<field>
+			<name>Serviço</name>
+			<type>listtopic</type>
+		</field>
+		<field>
+			<fielddescr>Habilitar</fielddescr>
+			<fieldname>enable</fieldname>
+			<description><![CDATA[Liga o serviço Guarita. Enquanto estiver desligado,
+			nenhuma tabela é atualizada e as regras que usam os aliases do Guarita
+			ficam sem membros (ou seja, não casam com ninguém).]]></description>
+			<type>checkbox</type>
+		</field>
+
+		<field>
+			<name>Active Directory</name>
+			<type>listtopic</type>
+		</field>
+		<field>
+			<fielddescr>Servidor LDAP</fielddescr>
+			<fieldname>authserver</fieldname>
+			<description><![CDATA[Servidor de autenticação LDAP do seu Active Directory,
+			usado para descobrir os grupos de cada usuário.<br/><br/>
+			Cadastre-o antes em <a href="/system_authservers.php">System &gt; User Manager &gt;
+			Authentication Servers</a>. Use uma conta de serviço do domínio, sem privilégios
+			especiais: ela só precisa poder ler os grupos.]]></description>
+			<type>select_source</type>
+			<source><![CDATA[guarita_authservers_list()]]></source>
+			<source_name>name</source_name>
+			<source_value>value</source_value>
+			<required/>
+		</field>
+		<field>
+			<fielddescr>Seguir grupos aninhados</fielddescr>
+			<fieldname>ldap_nested</fieldname>
+			<description><![CDATA[Considera também os grupos que o usuário herda por
+			estar em outro grupo. Deixe ligado salvo se a sua estrutura de grupos for
+			rasa: desligado, a consulta é mais rápida, mas um usuário que esteja em
+			"Vendas" dentro de "Comercial" não será visto como "Comercial".<br/><br/>
+			Lembre-se de que o Active Directory só entrega grupos de escopo
+			<b>Global</b> ou <b>Universal</b> em consultas de outro domínio; grupos de
+			escopo "Domínio Local" podem não aparecer.]]></description>
+			<type>checkbox</type>
+		</field>
+
+		<field>
+			<name>Agentes nos controladores de domínio</name>
+			<type>listtopic</type>
+		</field>
+		<field>
+			<fielddescr>Endereço de escuta</fielddescr>
+			<fieldname>listen_ip</fieldname>
+			<description><![CDATA[IP da interface onde a API dos agentes vai escutar.
+			Deixe vazio para escutar em todas (0.0.0.0).<br/><br/>
+			<b>Importante:</b> crie uma regra de firewall permitindo apenas os IPs dos
+			seus controladores de domínio nesta porta. Qualquer um que alcance esta porta
+			e conheça o segredo pode afirmar que um usuário está num IP.]]></description>
+			<type>input</type>
+			<size>20</size>
+		</field>
+		<field>
+			<fielddescr>Porta</fielddescr>
+			<fieldname>listen_port</fieldname>
+			<description><![CDATA[Porta TCP da API dos agentes. Padrão: 8923.]]></description>
+			<type>input</type>
+			<size>8</size>
+			<default_value>8923</default_value>
+		</field>
+		<field>
+			<fielddescr>Segredo dos agentes</fielddescr>
+			<fieldname>agent_secret</fieldname>
+			<description><![CDATA[Segredo compartilhado com os agentes. Toda mensagem
+			de agente é assinada com ele (HMAC-SHA256), e mensagens com relógio fora de
+			±5 minutos são recusadas.<br/><br/>
+			Use o mesmo valor no instalador do agente, na aba <b>Agentes</b>.
+			Mínimo de 16 caracteres.]]></description>
+			<type>password</type>
+			<size>60</size>
+			<required/>
+		</field>
+
+		<field>
+			<name>Sessões</name>
+			<type>listtopic</type>
+		</field>
+		<field>
+			<fielddescr>Duração da sessão (minutos)</fielddescr>
+			<fieldname>session_ttl</fieldname>
+			<description><![CDATA[Quanto tempo a associação usuário↔IP continua valendo
+			sem receber novos eventos daquele usuário. Expirada, o IP sai das tabelas de
+			grupo e passa a cair nas regras genéricas.<br/><br/>
+			Padrão: 240 (4 horas). Em rede com estações fixas, valores maiores reduzem
+			consultas; em laboratório ou Wi-Fi com muita rotatividade, use menos.]]></description>
+			<type>input</type>
+			<size>8</size>
+			<default_value>240</default_value>
+		</field>
+		<field>
+			<fielddescr>Reconsultar grupos a cada (minutos)</fielddescr>
+			<fieldname>group_refresh</fieldname>
+			<description><![CDATA[Intervalo para reconsultar no AD os grupos de quem já
+			está com sessão ativa. É o que faz uma mudança de grupo no AD passar a valer
+			sem o usuário precisar sair e entrar de novo.<br/><br/>
+			Padrão: 30.]]></description>
+			<type>input</type>
+			<size>8</size>
+			<default_value>30</default_value>
+		</field>
+		<field>
+			<fielddescr>Grupo padrão</fielddescr>
+			<fieldname>default_group</fieldname>
+			<description><![CDATA[Nome curto do grupo aplicado quando o usuário é
+			conhecido mas não cai em nenhum grupo configurado, ou quando o AD está
+			inacessível no momento do logon.<br/><br/>
+			Deixe vazio para não aplicar grupo nenhum nesse caso. Útil para criar um
+			grupo "visitante" bem restrito e apontar aqui.]]></description>
+			<type>input</type>
+			<size>24</size>
+		</field>
+
+		<field>
+			<name>Diagnóstico</name>
+			<type>listtopic</type>
+		</field>
+		<field>
+			<fielddescr>Log detalhado</fielddescr>
+			<fieldname>debug</fieldname>
+			<description><![CDATA[Registra cada sincronização de tabela e cada falha de
+			resolução de grupo em <a href="/status_logs_packages.php?pkg=guarita.log">Status
+			&gt; System Logs &gt; Guarita</a>. Deixe ligado só enquanto estiver
+			investigando algo: em rede grande o log cresce rápido.]]></description>
+			<type>checkbox</type>
+		</field>
+	</fields>
+
+	<custom_php_validation_command>
+		guarita_validate_settings($_POST, $input_errors);
+	</custom_php_validation_command>
+
+	<custom_php_resync_config_command>
+		guarita_resync_config();
+	</custom_php_resync_config_command>
+
+	<custom_php_install_command>
+		guarita_install();
+	</custom_php_install_command>
+
+	<custom_php_deinstall_command>
+		guarita_deinstall();
+	</custom_php_deinstall_command>
+</packagegui>
