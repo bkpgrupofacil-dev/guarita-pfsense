@@ -8,6 +8,17 @@
 Pacote Guarita para pfSense.
 Licenciado sob a Apache License, versão 2.0.
 	]]></copyright>
+<!--
+	ATENCAO: os textos de <menu>, <service> e <tabs> abaixo, e o <descr> do
+	info.xml, vao para dentro do config.xml do pfSense. Eles tem de ser ASCII.
+	O pfSense 2.7.x grava esses valores com htmlentities() sem ENT_XML1, o que
+	transforma "usuario" acentuado em "usu&aacute;rio" — entidade que nao
+	existe em XML. O config.xml fica ilegivel, o pfSense salva como
+	config.xml.bad e RESTAURA UM BACKUP, revertendo a configuracao do firewall.
+	build/check-config-ascii.py verifica isso no build.
+	Os rotulos e textos de ajuda dos campos (<fielddescr>, <description>
+	dentro de <field>) NAO passam por ali e podem ter acentos.
+-->
 	<name>Guarita</name>
 	<version>%%PKGVERSION%%</version>
 	<title>Guarita: Configurações</title>
@@ -15,7 +26,7 @@ Licenciado sob a Apache License, versão 2.0.
 
 	<menu>
 		<name>Guarita</name>
-		<tooltiptext>Controle de acesso por usuário do Active Directory</tooltiptext>
+		<tooltiptext>Controle de acesso por usuario do Active Directory</tooltiptext>
 		<section>Services</section>
 		<url>/pkg_edit.php?xml=guarita.xml</url>
 	</menu>
@@ -24,12 +35,12 @@ Licenciado sob a Apache License, versão 2.0.
 		<name>guaritad</name>
 		<rcfile>guaritad.sh</rcfile>
 		<executable>guaritad</executable>
-		<description>Guarita: identificação de usuários do AD</description>
+		<description>Guarita: identificacao de usuarios do AD</description>
 	</service>
 
 	<tabs>
 		<tab>
-			<text>Configurações</text>
+			<text>Configuracoes</text>
 			<url>/pkg_edit.php?xml=guarita.xml</url>
 			<active/>
 		</tab>
@@ -38,7 +49,7 @@ Licenciado sob a Apache License, versão 2.0.
 			<url>/pkg.php?xml=guaritagroups.xml</url>
 		</tab>
 		<tab>
-			<text>Sessões</text>
+			<text>Sessoes</text>
 			<url>/guarita_sessions.php</url>
 		</tab>
 		<tab>

@@ -71,6 +71,72 @@ function guarita_valid_table_name($name) {
 }
 
 /*
+ * guarita_config_keeps_accents() diz se esta versão do pfSense consegue gravar
+ * texto acentuado no config.xml sem corrompê-lo.
+ *
+ * O pfSense 2.7.x grava os valores com htmlentities($valor), sem a flag
+ * ENT_XML1, o que transforma "ação" em "a&ccedil;&atilde;o". Essa entidade não
+ * existe em XML (só &amp;, &lt;, &gt;, &quot;, &apos; e as numéricas são
+ * válidas). O config.xml fica ilegível para o próprio pfSense, que o salva como
+ * config.xml.bad e RESTAURA UM BACKUP — ou seja, uma instalação de pacote pode
+ * reverter a configuração do firewall. O 2.8 passou a usar ENT_XML1 e não tem
+ * esse problema.
+ */
+function guarita_config_keeps_accents() {
+	static $ok = null;
+	if ($ok !== null) {
+		return $ok;
+	}
+	$v = '';
+	if (file_exists('/etc/version')) {
+		$v = trim((string) @file_get_contents('/etc/version'));
+	}
+	/* "2.7.2-RELEASE" => "2.7.2" ; "2.9.0-DEVELOPMENT" => "2.9.0" */
+	$num = preg_replace('/[^0-9.].*$/', '', $v);
+	$num = trim($num, '.');
+	if ($num === '') {
+		/* Sem saber a versão, assume o comportamento antigo: é o seguro. */
+		$ok = false;
+	} else {
+		$ok = version_compare($num, '2.8', '>=');
+	}
+	return $ok;
+}
+
+/* Transliteração simples de acentos para ASCII. */
+function guarita_deaccent($s) {
+	$map = array(
+		'á'=>'a','à'=>'a','ã'=>'a','â'=>'a','ä'=>'a','å'=>'a',
+		'é'=>'e','è'=>'e','ê'=>'e','ë'=>'e',
+		'í'=>'i','ì'=>'i','î'=>'i','ï'=>'i',
+		'ó'=>'o','ò'=>'o','õ'=>'o','ô'=>'o','ö'=>'o',
+		'ú'=>'u','ù'=>'u','û'=>'u','ü'=>'u',
+		'ç'=>'c','ñ'=>'n','ý'=>'y',
+		'Á'=>'A','À'=>'A','Ã'=>'A','Â'=>'A','Ä'=>'A','Å'=>'A',
+		'É'=>'E','È'=>'E','Ê'=>'E','Ë'=>'E',
+		'Í'=>'I','Ì'=>'I','Î'=>'I','Ï'=>'I',
+		'Ó'=>'O','Ò'=>'O','Õ'=>'O','Ô'=>'O','Ö'=>'O',
+		'Ú'=>'U','Ù'=>'U','Û'=>'U','Ü'=>'U',
+		'Ç'=>'C','Ñ'=>'N',
+		'º'=>'o','ª'=>'a','°'=>'',
+	);
+	$s = strtr($s, $map);
+	/* O que sobrar de não-ASCII sai, para nunca corromper o config.xml. */
+	return preg_replace('/[^\x20-\x7E]/', '', $s);
+}
+
+/*
+ * guarita_config_safe_text() prepara um texto para ser gravado no config.xml.
+ * Nas versões afetadas, tira os acentos; nas corrigidas, passa intacto.
+ */
+function guarita_config_safe_text($s) {
+	if (guarita_config_keeps_accents()) {
+		return $s;
+	}
+	return guarita_deaccent($s);
+}
+
+/*
  * guarita_lookup_ca_cert() devolve o certificado da CA (PEM) a partir do refid,
  * ou string vazia se não achar.
  *
@@ -221,7 +287,11 @@ function guarita_write_config() {
 		'state_path'    => GUARITA_STATE,
 		'table_dir'     => GUARITA_TABLEDIR,
 		'default_group' => isset($s['default_group']) ? $s['default_group'] : '',
-		'log_facility'  => 'local5',
+		/* Facility real usada pelo daemon. Evita local5 (o pfSense roteia
+		 * local5.* para o nginx.log) e local3 (vpn.log). O roteamento para
+		 * /var/log/guarita.log acontece pelo nome do programa, nao pela
+		 * facility: ver o comentario em info.xml. */
+		'log_facility'  => 'local4',
 		'debug'         => !empty($s['debug']),
 		'ldap'          => $ldap,
 		'groups'        => $groups,
@@ -282,8 +352,13 @@ function guarita_sync_aliases() {
 			@file_put_contents($file, '');
 		}
 
-		$descr = sprintf(gettext('Guarita: grupo %s (conteúdo gerenciado pelo serviço)'),
-			!empty($g['name']) ? $g['name'] : $g['table']);
+		/* Vai para o config.xml: passa por guarita_config_safe_text(), que
+		 * tira os acentos nas versões do pfSense que corrompem o arquivo com
+		 * eles. O nome do grupo é digitado pelo administrador, então o acento
+		 * pode vir dele também. */
+		$descr = guarita_config_safe_text(sprintf(
+			gettext('Guarita: grupo %s (conteudo gerenciado pelo servico)'),
+			!empty($g['name']) ? $g['name'] : $g['table']));
 
 		/*
 		 * Tipo "host" com a lista de endereços VAZIA, de propósito.
@@ -660,6 +735,27 @@ function guarita_validate_group($post, &$input_errors) {
 	}
 	if (($post['priority'] !== '') && !ctype_digit((string) $post['priority'])) {
 		$input_errors[] = gettext('A prioridade precisa ser um número inteiro (0 = maior prioridade).');
+	}
+
+	/*
+	 * Em pfSense 2.7.x, texto acentuado gravado no config.xml o corrompe: o
+	 * escritor usa htmlentities() sem ENT_XML1 e produz entidades que não
+	 * existem em XML. O pfSense então restaura um backup, revertendo a
+	 * configuração do firewall. Melhor recusar o acento com uma explicação do
+	 * que deixar o administrador perder a configuração.
+	 */
+	if (!guarita_config_keeps_accents()) {
+		foreach (array('name' => gettext('Nome'), 'descr' => gettext('Descrição')) as $k => $label) {
+			if (empty($post[$k])) {
+				continue;
+			}
+			if (preg_match('/[^\x20-\x7E]/', $post[$k])) {
+				$input_errors[] = sprintf(gettext(
+					'%s: esta versão do pfSense não grava acentos no config.xml ' .
+					'sem corrompê-lo, então use apenas letras sem acento aqui. ' .
+					'(Corrigido no pfSense 2.8.)'), $label);
+			}
+		}
 	}
 }
 

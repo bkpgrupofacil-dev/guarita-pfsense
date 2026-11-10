@@ -14,6 +14,7 @@
 #   VERSION=0.2.0 sh build/build.sh
 
 set -eu
+# O pipefail nao e POSIX, mas precisamos que a falha do verificador pare o build.
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
@@ -36,6 +37,15 @@ go vet ./...
 echo "==> testes"
 go test ./... >/dev/null
 echo "    todos passaram"
+
+echo "==> conferindo que os campos do config.xml sao ASCII"
+if ! python3 build/check-config-ascii.py \
+	pkg/pfsense/files/usr/local/pkg/guarita.xml \
+	pkg/pfsense/files/usr/local/pkg/guaritagroups.xml \
+	pkg/pfsense/files/usr/local/share/pfSense-pkg-Guarita/info.xml; then
+	echo "build abortado: veja acima" >&2
+	exit 1
+fi
 
 # -------------------------------------------------------- binário FreeBSD
 echo "==> compilando guaritad para freebsd/amd64"
@@ -84,7 +94,22 @@ chmod 0755 "$STAGE/usr/local/sbin/guaritad"
 
 # ------------------------------------------------------- lista de arquivos
 echo "==> gerando a lista de arquivos (plist)"
-( cd "$STAGE" && find . -type f -print | sed 's|^\./||' | sort ) > "$OUT/plist"
+# No formato de plist do FreeBSD, um caminho RELATIVO é resolvido a partir do
+# prefix do pacote (/usr/local), e só um caminho ABSOLUTO vale como está. Então
+# o que está sob stage/usr/local/ entra sem esse pedaço, e o resto entra com
+# barra na frente. Os pacotes oficiais do pfSense fazem exatamente isso:
+#
+#     pkg/arping.xml                  -> /usr/local/pkg/arping.xml
+#     /etc/inc/priv/arping.priv.inc   -> /etc/inc/priv/arping.priv.inc
+#
+# Listar "usr/local/pkg/guarita.xml" faria o pkg procurar o arquivo em
+# /usr/local/usr/local/pkg/guarita.xml e a montagem do pacote falharia.
+( cd "$STAGE" && find . -type f -print | sed 's|^\./||' | sort ) | while read -r f; do
+	case "$f" in
+		usr/local/*) echo "${f#usr/local/}" ;;
+		*)           echo "/$f" ;;
+	esac
+done > "$OUT/plist"
 NFILES=$(wc -l < "$OUT/plist" | tr -d ' ')
 echo "    $NFILES arquivos"
 

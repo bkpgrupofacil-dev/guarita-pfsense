@@ -34,7 +34,10 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.LDAP.UserAttr != "sAMAccountName" {
 		t.Errorf("UserAttr = %q", c.LDAP.UserAttr)
 	}
-	if c.LogFacility != "local5" {
+	// local4 e não local5: o pfSense roteia local5.* para o nginx.log e
+	// local3.* para o vpn.log, então usar local5 duplicaria os nossos
+	// registros dentro do log do nginx.
+	if c.LogFacility != "local4" {
 		t.Errorf("LogFacility = %q", c.LogFacility)
 	}
 }

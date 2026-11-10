@@ -96,8 +96,11 @@ func main() {
 }
 
 func newLogger(cfg *config.Config) *log.Logger {
-	// No pfSense os logs do pacote vão para o syslog na facility configurada,
-	// o que faz o pfSense mostrá-los em Status > System Logs.
+	// No pfSense, o que leva estes registros para /var/log/guarita.log (e para
+	// Status > System Logs > Guarita) é a TAG do processo, "guaritad": o
+	// pfSense gera em /var/etc/syslog.d/ uma regra "!guaritad" seguida de
+	// "*.* /var/log/guarita.log", e em syslog BSD "!nome" filtra pelo nome do
+	// programa. A facility abaixo só precisa não colidir com outro destino.
 	fac := syslogFacility(cfg.LogFacility)
 	w, err := syslog.New(fac|syslog.LOG_INFO, "guaritad")
 	if err != nil {
@@ -120,10 +123,12 @@ func syslogFacility(name string) syslog.Priority {
 		return syslog.LOG_LOCAL4
 	case "local6":
 		return syslog.LOG_LOCAL6
+	case "local5":
+		return syslog.LOG_LOCAL5
 	case "local7":
 		return syslog.LOG_LOCAL7
 	default:
-		return syslog.LOG_LOCAL5
+		return syslog.LOG_LOCAL4
 	}
 }
 

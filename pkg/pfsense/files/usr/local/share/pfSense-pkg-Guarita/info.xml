@@ -3,14 +3,30 @@
 	<package>
 		<name>Guarita</name>
 		<internal_name>Guarita</internal_name>
-		<descr><![CDATA[Controle de acesso à internet por usuário do Active Directory.
-Identifica qual usuário do AD está atrás de cada IP e mantém uma tabela do
-firewall por grupo, para que as regras valham por usuário e não por endereço.]]></descr>
+		<!-- ASCII apenas: este texto vai para o config.xml. Ver
+		     build/check-config-ascii.py. -->
+		<descr><![CDATA[Controle de acesso a internet por usuario do Active Directory.
+Identifica qual usuario do AD esta atras de cada IP e mantem uma tabela do
+firewall por grupo, para que as regras valham por usuario e nao por endereco.]]></descr>
 		<website>https://github.com/bkpgrupofacil-dev/guarita-pfsense</website>
 		<version>%%PKGVERSION%%</version>
 		<configurationfile>guarita.xml</configurationfile>
+		<!--
+			Apesar do nome, <facilityname> NAO e uma facility de syslog: o
+			pfSense o usa como filtro de PROGRAMA, gerando em
+			/var/etc/syslog.d/ o trecho
+
+			    !<facilityname>
+			    *.*     /var/log/<logfilename>
+
+			Em syslog BSD, "!nome" casa pelo nome do programa. Entao este
+			campo tem de ser igual a tag com que o guaritad escreve no
+			syslog, que e "guaritad". Com "local5" aqui o arquivo de log
+			ficava sempre vazio, e ainda colidia com o nginx, que o pfSense
+			roteia com "local5.* -> /var/log/nginx.log".
+		-->
 		<logging>
-			<facilityname>local5</facilityname>
+			<facilityname>guaritad</facilityname>
 			<logfilename>guarita.log</logfilename>
 		</logging>
 	</package>

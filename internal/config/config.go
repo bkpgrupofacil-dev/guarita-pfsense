@@ -63,7 +63,10 @@ type Config struct {
 	// Groups é a lista de grupos lógicos e o mapeamento para grupos do AD.
 	Groups []Group `json:"groups"`
 
-	// LogFacility é a facility de syslog (ex.: "local5") para os logs por usuário.
+	// LogFacility é a facility de syslog (ex.: "local4") para os logs por usuário.
+	// O que faz os registros caírem em /var/log/guarita.log no pfSense é a TAG
+	// do processo ("guaritad"), que o pfSense usa como filtro de programa; a
+	// facility só precisa não colidir com outro destino.
 	LogFacility string `json:"log_facility"`
 
 	// Debug habilita log detalhado.
@@ -176,7 +179,9 @@ func (c *Config) applyDefaults() {
 		c.ReapplyInterval = Duration(60 * time.Second)
 	}
 	if c.LogFacility == "" {
-		c.LogFacility = "local5"
+		// local4 nao e roteada para nenhum outro log pelo pfSense; local5 vai
+		// para o nginx.log e local3 para o vpn.log.
+		c.LogFacility = "local4"
 	}
 	if c.LDAP.UserAttr == "" {
 		c.LDAP.UserAttr = "sAMAccountName"

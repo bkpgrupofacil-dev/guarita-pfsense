@@ -95,6 +95,14 @@ Fases seguintes, em ordem:
 | Conta de serviço no AD | Uma conta comum, que só precisa poder ler os grupos |
 | Grupos do AD | Escopo **Global** ou **Universal** |
 
+> **pfSense 2.7.x e acentos:** nessa série, o pfSense grava o `config.xml` com
+> `htmlentities()` sem `ENT_XML1`, o que transforma texto acentuado em entidades
+> que não existem em XML e corrompe o arquivo — o firewall então restaura um
+> backup. O pacote contorna isso: tudo que ele mesmo grava é ASCII, e nos nomes
+> e descrições de grupo ele recusa acentos **apenas nessas versões**, com uma
+> mensagem explicando. No pfSense 2.8, corrigido pela Netgate, você pode usar
+> acentos livremente.
+
 > **Windows Server 2008:** o agente foi escrito para rodar em PowerShell 2.0,
 > mas o 2008 original vem com o 1.0 — é preciso instalar o Windows Management
 > Framework 2.0. O 2008 está fora de suporte da Microsoft; quando migrar para o
@@ -241,7 +249,15 @@ sh build/build.sh
 
 O teste de integração sobe o daemon de verdade com um `pfctl` falso e verifica
 o fluxo completo: evento assinado, criação da sessão, escrita da tabela, API
-local, persistência e recarga por SIGHUP. Não precisa de pfSense nem de AD.
+local, persistência, recarga por SIGHUP e reposição após recarga de filtro. Não
+precisa de pfSense nem de AD.
+
+Para o que só um pfSense de verdade revela — `pkg create`, registro no
+`config.xml`, criação do alias, tabela no `pf`, roteamento do log — existe
+`build/verify-on-pfsense.sh`, que roda **dentro** do firewall e faz 33
+verificações, incluindo enviar um evento de agente assinado e conferir se o IP
+chega na tabela. Foi ele que encontrou três defeitos que nenhum teste fora do
+pfSense pegaria.
 
 O agente em PowerShell não pode ser executado em Linux, então
 `build/ps_mimic.py` replica as funções de montagem do JSON e de assinatura do
