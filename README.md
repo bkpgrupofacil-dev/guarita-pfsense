@@ -220,7 +220,16 @@ restritos podem ganhar acesso livre, ou todo mundo pode perder o acesso.
 - **Depois de cada atualização**, rode o `install.sh` de novo. Tudo volta com as
   mesmas configurações, e os agentes dos DCs reconectam sozinhos, porque o
   segredo é o mesmo.
+- **Depois de restaurar um backup de configuração**, também. A restauração faz o
+  pfSense reinstalar os pacotes a partir do repositório oficial, e o que não
+  está lá é removido do mesmo jeito.
 - Guarde o tarball do Guarita fora do firewall, para ter de onde reinstalar.
+
+> **Queda de energia:** num teste, uma VM com pfSense em **UFS** desligada de
+> forma abrupta voltou **sem `config.xml` e sem nenhum backup** — configuração
+> de fábrica. Não é efeito do Guarita: é o sistema de arquivos. Use **ZFS** (o
+> padrão do instalador desde o 2.6, mais resistente a isso) e mantenha backups
+> da configuração fora do firewall.
 
 ## Verificação
 
