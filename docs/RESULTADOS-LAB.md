@@ -32,6 +32,10 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | B3 grupos | ok | `liberado` (AD `liberado`, prio 0) e `bloqueio` (AD `bloqueio`, prio 10), salvos pela interface. Nome amigável "Bloqueio de Navegação": gravado em UTF-8 no `config.xml`, que continuou bem formado e sem `config.xml.bad`; chegou ao alias, ao JSON do daemon e à tela de Status |
 | B4 testar usuários | **falhou**, corrigido | Antes: os usuários voltavam sem grupo nenhum (defeito 8). Depois: `leandroliberado` -> `liberado`, `leandrobloq` -> `bloqueio`; `naoexiste` -> "não encontrado no AD" |
 | B5 grupo aninhado | ok | `leandro` em `interno`, que está em `liberado`. Aninhados ligado: AD `interno,liberado` -> `liberado`. Desligado: AD `interno` -> nenhum grupo do Guarita |
+| C1 versões | ok | Windows Server 2008 R2 Standard SP1, pt-BR, **PowerShell 2.0** (o mesmo motor do DC de produção) |
+| C2 alcance da porta 8923 | ok | DC -> 192.168.1.1:8923 conecta (regra padrão "LAN to any") |
+| C3 teste de conexão | ok | `-TestOnly` no PowerShell 2.0: "ok, o pfSense respondeu: {"ok":true,...}" |
+| C4 instalação | **falhou**, corrigido | Quatro defeitos em sequência (9 a 12). Depois: tarefa "Guarita Agent" como SISTEMA a cada 1 min, último resultado 0; `secret.txt` só com SISTEMA e Administradores; auditoria lida pelo GUID |
 | B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
@@ -141,6 +145,52 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 - Teste que trava: `TestPrimaryGroupSID`, `TestPrimaryGroupSIDRejectsInvalid` e
   `TestEscapeBinary` (Go). No AD real, depois da correção: `leandroliberado` ->
   `liberado` e `leandrobloq` -> `bloqueio`.
+
+### 9 a 12. O instalador do agente não funcionava no Windows Server 2008 R2 em português
+
+Antes de rodar, um diagnóstico de leitura apenas no DC confirmou as suspeitas
+(Windows Server 2008 R2 SP1, pt-BR, PowerShell 2.0). Cada defeito só apareceu
+depois de corrigir o anterior:
+
+9. **`$PSScriptRoot` vazio.** Em scripts `.ps1` ele só existe a partir do
+   PowerShell 3.0. O instalador não achava o `guarita-agent.ps1` e parava.
+   Correção: `Split-Path -Parent $MyInvocation.MyCommand.Path`.
+10. **Segredo legível por qualquer usuário.** A permissão do `secret.txt` usava os
+    nomes `BUILTIN\Administrators` e `NT AUTHORITY\SYSTEM`. No DC em português a
+    tradução falhou ("Não foi possível converter algumas ou todas as referências
+    de identidade"), a falha virava só um aviso, e o arquivo ficava com a
+    permissão herdada de Program Files. Correção: contas pelo SID (`S-1-5-18`,
+    `S-1-5-32-544`), permissão aplicada e conferida num arquivo vazio e o
+    segredo gravado só depois; se falhar, o arquivo é apagado e a instalação para.
+11. **A auditoria não era conferida nem ligada.** `auditpol /subcategory:"Kerberos
+    Authentication Service"` dá "Erro 0x00000057: Parâmetro incorreto" num
+    Windows em português, e a saída diz "Êxito", não "Success". Correção:
+    subcategorias pelo GUID e o estado pela coluna numérica "Setting Value" do
+    `auditpol /backup`.
+12. **A tarefa agendada não era criada.** Primeiro, o `schtasks /Delete` da tarefa
+    anterior (que não existe na primeira instalação) escreve na saída de erro, e
+    no PowerShell 2.0, com `$ErrorActionPreference = 'Stop'`, isso derrubava o
+    script, que ainda saía com código 0. Corrigido isso, o `/TR` com o caminho
+    entre aspas chegava cortado ao `schtasks` ("Argumento/opção inválido -
+    'Files\Guarita\guarita-agent.ps1'"). Correção: `Invoke-Native` para os
+    executáveis externos, `trap` para sair com código 1, e a tarefa criada por
+    `schtasks /Create /XML`, com o programa e os argumentos em campos separados.
+
+- Teste que trava: `build/check-agent-compat.sh` (no `build.sh`) reprova
+  `$PSScriptRoot`, nomes de conta em inglês, `auditpol` por nome, `& schtasks`
+  ou `& auditpol` direto, `/TR`, cmdlets do PowerShell 3.0+ e acentos nos
+  `.ps1`. Com o instalador original, ele aponta 9 linhas.
+
+### 13. A segunda barreira contra eventos de falha do Kerberos estava desligada
+- Sintoma: no 2008 R2, o Status do 4768 lido pelo `Get-WinEvent` vem como número
+  (`0`), não `0x0`. `Get-StatusField` só aceitava `0x...` e devolvia vazio, então a
+  checagem do status era ignorada em todo evento.
+- Correção: aceitar o decimal e converter para `0x...`.
+- Teste que trava: `build/test-agent.ps1` (no `build.sh`, quando há PowerShell
+  na máquina do build), que carrega as funções do agente sem executá-lo. Com o
+  agente antigo, 4 falhas, entre elas "status 0x6 barra: obtido True".
+- Também: "nenhum evento encontrado" passa a ser reconhecido pelo
+  `FullyQualifiedErrorId` (`NoMatchingEventsFound`), que não muda com o idioma.
 
 Os testes de `cmd/guaritad` não compilam no Windows (`log/syslog`): foram
 compilados para FreeBSD (`GOOS=freebsd go test -c`) e rodados dentro do pfSense.

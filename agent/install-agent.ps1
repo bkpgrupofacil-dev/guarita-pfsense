@@ -46,6 +46,41 @@ param(
 $ErrorActionPreference = 'Stop'
 $TaskName = 'Guarita Agent'
 
+# Pasta deste script. $PSScriptRoot so existe em scripts a partir do
+# PowerShell 3.0 (na 2.0 so em modulos .psm1): no Windows Server 2008 R2 ele
+# vinha vazio e o instalador parava sem achar o guarita-agent.ps1.
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Contas pelo SID, nunca pelo nome: os nomes mudam com o idioma do Windows. Num
+# DC em portugues, 'BUILTIN\Administrators' nao existe (e
+# 'BUILTIN\Administradores'), a traducao falhava e o arquivo do segredo ficava
+# com a permissao herdada de Program Files, legivel por qualquer usuario.
+$SidSystem = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'
+$SidAdmins = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544'
+
+# Qualquer erro inesperado sai com codigo 1. Sem isto, no PowerShell 2.0 um
+# erro que interrompia o script saia com codigo 0, como se tivesse dado certo.
+trap {
+    Write-Host "[x] erro inesperado: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
+# Roda um executavel externo e devolve a saida como texto; o codigo de saida
+# fica em $LASTEXITCODE. Com $ErrorActionPreference = 'Stop', no PowerShell 2.0
+# cada linha que o programa escreve na saida de erro vira um erro que DERRUBA o
+# script: o "schtasks /Delete" de uma tarefa que ainda nao existe (o caso de
+# toda primeira instalacao) interrompia o instalador antes de criar a tarefa.
+function Invoke-Native {
+    param([string] $Exe, [string[]] $Arguments)
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @Arguments 2>&1 | ForEach-Object { [string] $_ }
+    } finally {
+        $ErrorActionPreference = $old
+    }
+}
+
 function Test-Admin {
     $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $p  = New-Object System.Security.Principal.WindowsPrincipal($id)
@@ -66,7 +101,7 @@ if (-not (Test-Admin)) {
 
 if ($Uninstall) {
     Write-Step "removendo a tarefa agendada"
-    & schtasks.exe /Delete /TN $TaskName /F 2>&1 | Out-Null
+    Invoke-Native schtasks.exe @("/Delete", "/TN", $TaskName, "/F") | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Ok "tarefa removida" } else { Write-Warn2 "tarefa nao existia" }
 
     if (Test-Path $InstallDir) {
@@ -95,9 +130,9 @@ if ($Secret.Length -lt 16) {
     exit 1
 }
 
-$srcAgent = Join-Path $PSScriptRoot 'guarita-agent.ps1'
+$srcAgent = Join-Path $ScriptDir 'guarita-agent.ps1'
 if (-not (Test-Path $srcAgent)) {
-    Write-Err2 "guarita-agent.ps1 nao encontrado em $PSScriptRoot"
+    Write-Err2 "guarita-agent.ps1 nao encontrado em $ScriptDir"
     exit 1
 }
 
@@ -122,26 +157,41 @@ Write-Ok "agente copiado"
 
 $secretPath = Join-Path $InstallDir 'secret.txt'
 Write-Step "gravando o segredo em $secretPath"
-Set-Content -Path $secretPath -Value $Secret -Encoding UTF8 -Force
 
-# Permissao: so SYSTEM e Administradores. Remove heranca.
+# Primeiro restringe a permissao de um arquivo VAZIO e so depois grava o
+# segredo. Se a permissao falhar, o segredo nunca chega ao disco com a
+# permissao herdada (antes, a falha virava so um aviso e o segredo ficava
+# legivel por qualquer usuario).
 try {
+    Set-Content -Path $secretPath -Value '' -Encoding ASCII -Force
     $acl = Get-Acl $secretPath
     $acl.SetAccessRuleProtection($true, $false)   # desliga heranca, descarta herdadas
     foreach ($r in @($acl.Access)) { [void] $acl.RemoveAccessRule($r) }
 
     $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
     $allow  = [System.Security.AccessControl.AccessControlType]::Allow
-    foreach ($who in @('NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators')) {
+    foreach ($who in @($SidSystem, $SidAdmins)) {
         $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($who, $rights, $allow)
         $acl.AddAccessRule($rule)
     }
     Set-Acl -Path $secretPath -AclObject $acl
-    Write-Ok "permissao restrita a SYSTEM e Administradores"
+
+    # Confere o resultado: nenhuma regra herdada e so os dois SIDs.
+    $check = Get-Acl $secretPath
+    foreach ($r in @($check.Access)) {
+        $sid = $r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($r.IsInherited -or ($sid -ne $SidSystem.Value -and $sid -ne $SidAdmins.Value)) {
+            throw "permissao inesperada para $($r.IdentityReference)"
+        }
+    }
 } catch {
-    Write-Warn2 "nao consegui ajustar a permissao do arquivo: $($_.Exception.Message)"
-    Write-Warn2 "ajuste manualmente para que apenas SYSTEM e Administradores leiam $secretPath"
+    Remove-Item -Path $secretPath -Force -ErrorAction SilentlyContinue
+    Write-Err2 "nao consegui restringir a permissao de $secretPath : $($_.Exception.Message)"
+    Write-Err2 "o segredo NAO foi gravado. Instalacao interrompida."
+    exit 1
 }
+Set-Content -Path $secretPath -Value $Secret -Encoding ASCII -Force
+Write-Ok "permissao restrita a SYSTEM e Administradores"
 
 # --------------------------------------------------------- 3. auditoria
 
@@ -149,36 +199,56 @@ try {
 # Sem isso o log de Seguranca nao tera 4768/4769 e nada sera detectado.
 Write-Step "verificando a auditoria de logon"
 
+# Subcategorias pelo GUID, nunca pelo nome: o auditpol so aceita o nome no
+# idioma do Windows. Num DC em portugues, /subcategory:"Kerberos Authentication
+# Service" da "Erro 0x00000057: Parametro incorreto", e a saida diz "Exito" e
+# nao "Success". Por isso o estado vem da coluna numerica "Setting Value" do
+# auditpol /backup (1 = sucesso, 2 = falha, 3 = ambos), que nao muda com o
+# idioma.
 $auditSubcategories = @(
-    'Kerberos Authentication Service',
-    'Kerberos Service Ticket Operations',
-    'Logon'
+    @{ Guid = '{0CCE9242-69AE-11D9-BED3-505054503030}'; Name = 'Kerberos Authentication Service' },
+    @{ Guid = '{0CCE9240-69AE-11D9-BED3-505054503030}'; Name = 'Kerberos Service Ticket Operations' },
+    @{ Guid = '{0CCE9215-69AE-11D9-BED3-505054503030}'; Name = 'Logon' }
 )
 
-function Get-AuditState {
-    param([string] $Subcategory)
+# Le o "Setting Value" de todas as subcategorias. Devolve GUID -> valor.
+function Get-AuditSettings {
+    $map = @{}
+    $tmp = Join-Path $env:TEMP ('guarita-audit-{0}.csv' -f [guid]::NewGuid())
     try {
-        $out = & auditpol.exe /get /subcategory:"$Subcategory" 2>&1 | Out-String
-        if ($out -match 'Success') {
-            if ($out -match 'Success and Failure|Success') { return 'on' }
+        Invoke-Native auditpol.exe @("/backup", "/file:$tmp") | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tmp)) { return $map }
+        foreach ($row in @(Import-Csv -Path $tmp)) {
+            $g = [string] $row.'Subcategory GUID'
+            $v = [string] $row.'Setting Value'
+            if ($g -and $v -match '^\d+$') { $map[$g.ToUpper()] = [int] $v }
         }
-        if ($out -match 'No Auditing|Nenhuma Auditoria') { return 'off' }
-        return 'unknown'
     } catch {
-        return 'unknown'
+    } finally {
+        Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
     }
+    return $map
 }
 
+function Get-AuditState {
+    param($Settings, [string] $Guid)
+    if (-not $Settings.ContainsKey($Guid.ToUpper())) { return 'unknown' }
+    if (($Settings[$Guid.ToUpper()] -band 1) -ne 0) { return 'on' }
+    return 'off'
+}
+
+$auditSettings = Get-AuditSettings
 $auditProblem = $false
-foreach ($sub in $auditSubcategories) {
-    $state = Get-AuditState -Subcategory $sub
+foreach ($s in $auditSubcategories) {
+    $sub = $s.Name
+    $state = Get-AuditState -Settings $auditSettings -Guid $s.Guid
     if ($state -eq 'on') {
         Write-Ok "auditoria ligada: $sub"
     } elseif ($state -eq 'off') {
         $auditProblem = $true
         if ($EnableAudit) {
             Write-Step "ligando a auditoria de: $sub"
-            & auditpol.exe /set /subcategory:"$sub" /success:enable 2>&1 | Out-Null
+            Invoke-Native auditpol.exe @("/set", "/subcategory:$($s.Guid)", "/success:enable") | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok "auditoria ligada: $sub"
                 $auditProblem = $false
@@ -235,25 +305,68 @@ if ($NoTask) {
 Write-Step "criando a tarefa agendada '$TaskName'"
 
 # Remove uma anterior, se houver.
-& schtasks.exe /Delete /TN $TaskName /F 2>&1 | Out-Null
+Invoke-Native schtasks.exe @("/Delete", "/TN", $TaskName, "/F") | Out-Null
 
 # O comando da tarefa roda um ciclo e sai (-Once). A repeticao fica a cargo do
 # agendador, o que e mais robusto que um loop infinito: se um ciclo travar ou
 # morrer, o proximo comeca limpo.
-$cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"`"$agentPath`"`" " +
-       "-Server $Server -Port $Port -SecretFile `"`"$secretPath`"`" -Once"
-
-$create = @(
-    '/Create',
-    '/TN', $TaskName,
-    '/TR', $cmd,
-    '/SC', 'MINUTE',
-    '/MO', [string] $IntervalMinutes,
-    '/RU', 'SYSTEM',
-    '/RL', 'HIGHEST',
-    '/F'
-)
-& schtasks.exe @create 2>&1 | ForEach-Object { Write-Host "    $_" }
+#
+# A tarefa e criada por XML (schtasks /Create /XML), com o programa e os
+# argumentos em campos separados. Pelo /TR, o caminho com espaco
+# (C:\Program Files) exigia aspas dentro de aspas, e o PowerShell 2.0 as
+# repassa de um jeito que o schtasks corta o argumento no espaco: "ERRO:
+# Argumento/opcao invalido - 'Files\Guarita\guarita-agent.ps1'". No XML a
+# conta tambem vai pelo SID (S-1-5-18), que nao muda com o idioma.
+$esc = { param($s) [System.Security.SecurityElement]::Escape([string] $s) }
+$taskArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Server {1} -Port {2} -SecretFile "{3}" -Once' -f `
+    $agentPath, $Server, $Port, $secretPath
+$taskXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Guarita: envia ao pfSense os logons lidos neste controlador de dominio</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <TimeTrigger>
+      <Repetition>
+        <Interval>PT$([int] $IntervalMinutes)M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2000-01-01T00:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>$(& $esc $taskArgs)</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+$xmlPath = Join-Path $env:TEMP ('guarita-task-{0}.xml' -f [guid]::NewGuid())
+# O schtasks exige o XML em UTF-16, como declarado no cabecalho.
+[System.IO.File]::WriteAllText($xmlPath, $taskXml, [System.Text.Encoding]::Unicode)
+try {
+    Invoke-Native schtasks.exe @('/Create', '/TN', $TaskName, '/XML', $xmlPath, '/F') |
+        ForEach-Object { Write-Host "    $_" }
+} finally {
+    Remove-Item -Path $xmlPath -Force -ErrorAction SilentlyContinue
+}
 
 if ($LASTEXITCODE -ne 0) {
     Write-Err2 "falhou ao criar a tarefa agendada"
@@ -262,7 +375,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Ok "tarefa criada"
 
 Write-Step "executando a tarefa uma vez agora"
-& schtasks.exe /Run /TN $TaskName 2>&1 | Out-Null
+Invoke-Native schtasks.exe @("/Run", "/TN", $TaskName) | Out-Null
 Start-Sleep -Seconds 5
 
 Write-Host ""

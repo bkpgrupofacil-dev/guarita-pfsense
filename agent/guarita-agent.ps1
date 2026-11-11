@@ -343,7 +343,10 @@ function Get-SecurityEvents {
             $results = @(Get-WinEvent -LogName Security -FilterXPath $xpath `
                           -MaxEvents $MaxEventsPerCycle -ErrorAction Stop)
         } catch {
-            if ($_.Exception.Message -match 'No events were found|Nenhum evento') {
+            # O identificador do erro nao muda com o idioma; a mensagem fica
+            # como reserva.
+            if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or
+                $_.Exception.Message -match 'No events were found|Nenhum evento') {
                 return @()
             }
             throw
@@ -465,6 +468,10 @@ function Get-StatusField {
     if ($null -eq $Props -or $Props.Count -le $Index) { return '' }
     $v = ([string] $Props[$Index]).Trim()
     if ($v -match '^0x[0-9a-fA-F]+$') { return $v.ToLower() }
+    # Pelo Get-WinEvent (Properties[].Value) o Status chega como NUMERO e vira
+    # "0" em decimal, nao "0x0": visto no Windows Server 2008 R2. Sem isto a
+    # checagem era ignorada em todo evento lido pelo Get-WinEvent.
+    if ($v -match '^\d{1,10}$') { return ('0x{0:x}' -f [long] $v) }
     return ''
 }
 

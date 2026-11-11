@@ -47,6 +47,25 @@ if ! python3 build/check-config-ascii.py \
 	exit 1
 fi
 
+echo "==> conferindo que o agente roda no PowerShell 2.0 e em Windows em qualquer idioma"
+if ! sh build/check-agent-compat.sh agent/*.ps1; then
+	echo "build abortado: veja acima" >&2
+	exit 1
+fi
+
+echo "==> testes das funcoes do agente"
+PS=""
+command -v pwsh >/dev/null 2>&1 && PS=pwsh
+[ -z "$PS" ] && command -v powershell.exe >/dev/null 2>&1 && PS=powershell.exe
+if [ -n "$PS" ]; then
+	if ! "$PS" -NoProfile -ExecutionPolicy Bypass -File build/test-agent.ps1 | tail -1; then
+		echo "build abortado: testes do agente falharam (rode build/test-agent.ps1)" >&2
+		exit 1
+	fi
+else
+	echo "    pulado: nem pwsh nem powershell.exe nesta maquina"
+fi
+
 echo "==> conferindo que as paginas nao sobrescrevem globais do pfSense"
 if ! sh build/check-page-globals.sh pkg/pfsense/files/usr/local/www/*.php; then
 	echo "build abortado: veja acima" >&2
