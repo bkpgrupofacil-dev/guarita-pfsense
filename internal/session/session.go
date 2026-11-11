@@ -89,6 +89,34 @@ func (m *Manager) Upsert(ip netip.Addr, user, domain string, groups []string, so
 	return changed
 }
 
+// UpdateGroups troca só os grupos de uma sessão existente, depois de
+// reconsultar o AD. NÃO renova o SeenAt: quem diz que o usuário continua na
+// estação são os eventos do agente, não a reconsulta. Antes a reconsulta usava
+// Upsert, que renova o SeenAt, e uma sessão sem nenhum evento era renovada a cada
+// 30 minutos e nunca expirava; com o IP reaproveitado pelo DHCP, outra pessoa
+// herdaria a política do usuário anterior sem prazo.
+//
+// Só atualiza se o IP ainda for do mesmo usuário (pode ter havido um logon de
+// outro usuário enquanto o AD era consultado). Devolve true se os grupos
+// mudaram.
+func (m *Manager) UpdateGroups(ip netip.Addr, user string, groups []string) bool {
+	groups = normGroups(groups)
+	m.mu.Lock()
+	s := m.byIP[ip]
+	if s == nil || s.User != user {
+		m.mu.Unlock()
+		return false
+	}
+	changed := !sameStrings(s.Groups, groups)
+	s.Groups = groups
+	s.GroupsAt = time.Now()
+	m.mu.Unlock()
+	if changed {
+		m.fireChange()
+	}
+	return changed
+}
+
 // Touch apenas renova o SeenAt de um IP (ex.: evento de atividade), sem mudar
 // usuário/grupos. Devolve false se não havia sessão.
 func (m *Manager) Touch(ip netip.Addr) bool {

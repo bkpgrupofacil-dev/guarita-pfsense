@@ -408,24 +408,47 @@ func (d *daemon) refreshLoop() {
 		case <-tick.C:
 			cfg := d.snapshotCfg()
 			items := d.sessions.NeedGroupRefresh(cfg.GroupRefresh.D())
-			for _, it := range items {
-				select {
-				case <-d.ctx.Done():
-					return
-				default:
-				}
-				d.cache.Invalidate(it.User)
-				groups, _, err := d.resolveGroups(it.User)
-				if err != nil {
-					if cfg.Debug {
-						d.log.Printf("refresh de %s falhou: %v", it.User, err)
-					}
-					continue
-				}
-				d.sessions.Upsert(it.IP, it.User, it.Domain, groups, "ad-agent")
-			}
+			refreshSessions(d.ctx, d.sessions, items, d.freshGroups, d.debugf)
 		}
 	}
+}
+
+// freshGroups resolve os grupos de um usuário direto no AD, sem o cache.
+func (d *daemon) freshGroups(user string) ([]string, error) {
+	d.cache.Invalidate(user)
+	groups, _, err := d.resolveGroups(user)
+	return groups, err
+}
+
+func (d *daemon) debugf(format string, args ...any) {
+	if d.snapshotCfg().Debug {
+		d.log.Printf(format, args...)
+	}
+}
+
+// refreshSessions reconsulta no AD os grupos das sessões indicadas e as
+// atualiza. Uma falha de consulta mantém os grupos que a sessão já tinha.
+// Devolve quantas sessões mudaram de grupo.
+func refreshSessions(ctx context.Context, sessions *session.Manager, items []session.RefreshItem,
+	resolve func(user string) ([]string, error), debugf func(string, ...any)) int {
+	changed := 0
+	for _, it := range items {
+		select {
+		case <-ctx.Done():
+			return changed
+		default:
+		}
+		groups, err := resolve(it.User)
+		if err != nil {
+			debugf("refresh de %s falhou: %v", it.User, err)
+			continue
+		}
+		// UpdateGroups e não Upsert: a reconsulta não pode renovar a sessão.
+		if sessions.UpdateGroups(it.IP, it.User, groups) {
+			changed++
+		}
+	}
+	return changed
 }
 
 // resolveGroups consulta o cache e, em falta, o AD.
@@ -567,8 +590,19 @@ func (d *daemon) SetSticky(ip netip.Addr, on bool) bool {
 	return d.sessions.SetSticky(ip, on)
 }
 
+// Resync atende o "Reaplicar tabelas" da interface.
+//
+// Antes ele só limpava o cache e reaplicava as tabelas com os grupos já
+// guardados nas sessões: quem mudava de grupo no AD continuava com a política
+// antiga até o próximo evento do agente depois de o cache expirar (até 30 min).
+// No laboratório, com o usuário já movido para "bloqueio" no AD, o botão não
+// mudou nada. Agora ele reconsulta no AD os grupos de todas as sessões.
 func (d *daemon) Resync() error {
 	d.cache.Purge()
+	items := d.sessions.NeedGroupRefresh(0)
+	if n := refreshSessions(d.ctx, d.sessions, items, d.freshGroups, d.debugf); n > 0 {
+		d.log.Printf("reaplicar: %d sessão(ões) mudaram de grupo após reconsultar o AD", n)
+	}
 	d.doSync()
 	d.mu.RLock()
 	err := d.lastSyncError

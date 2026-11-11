@@ -44,6 +44,7 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | D3 teste cruzado | ok | Mesma estação, logon com `leandroliberado`: às 17:20:00 o IP saiu de `guarita_bloqueio` e entrou em `guarita_liberado` no mesmo segundo, os bloqueios pararam e o site abriu. Regra de teste removida |
 | E1 reinício | ok, com ressalva | Reboot pelo sistema: a sessão `leandroliberado` foi restaurada do disco e o IP voltou a `guarita_liberado` 1 s depois de o serviço subir. Ressalva: o pfSense iniciou o serviço duas vezes no boot, e isso expôs o defeito 16 |
 | E2 recarga do filtro | ok | Salvar a configuração sem mudar o ruleset esvaziou a tabela, e ela foi reposta sozinha em cerca de 7 s, com "o filtro do pfSense foi recarregado; repondo as tabelas" (depende da correção do defeito 3) |
+| E3 mudança de grupo no AD | **falhou**, corrigido | `leandroliberado` movido de `liberado` para `bloqueio` no AD, sem logoff. "Testar um usuário" já mostrava `bloqueio`, mas "Reaplicar tabelas" não mudou a sessão (defeito 18). Depois da correção: a sessão e o IP passaram para `bloqueio` na hora, e o `seen_at` não foi renovado |
 | B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
@@ -244,6 +245,34 @@ depois de corrigir o anterior:
 - Causa: o passo exigia `total=1`.
 - Correção: procura a sessão de teste pelo IP. A sessão real foi preservada pela
   restauração. Verify 43/43.
+
+### 18. "Reaplicar tabelas" não reconsultava os grupos no AD
+- Sintoma: com o usuário já movido para `bloqueio` no AD (e "Testar um usuário"
+  mostrando isso), "Reaplicar tabelas" não mudou nada.
+- Causa: `Resync()` limpava o cache e reaplicava as tabelas com os grupos já
+  guardados nas sessões. A mudança só chegava no próximo evento do agente depois
+  de o cache expirar (até 30 minutos).
+- Correção: `Resync()` reconsulta no AD os grupos de todas as sessões. O
+  `refreshLoop` passou a usar a mesma função (`refreshSessions`).
+- Teste que trava: `TestRefreshSessionsMovesUserToNewGroup` e
+  `TestRefreshSessionsKeepsGroupsOnError`. No laboratório: "reaplicar: 1
+  sessão(ões) mudaram de grupo após reconsultar o AD".
+
+### 19. A reconsulta de grupos impedia as sessões de expirar
+- Sintoma: achado lendo o código durante o E3 e confirmado por teste. A
+  reconsulta periódica dos grupos (a cada 30 min) usava `Upsert`, que renova o
+  `SeenAt`. Uma sessão sem nenhum evento do agente era renovada a cada 30 minutos
+  e nunca expirava pelo TTL (4 h). Com o IP reaproveitado pelo DHCP, outra pessoa
+  herdaria a política do usuário anterior sem prazo.
+- Correção: `session.UpdateGroups`, que troca só os grupos (e só se o IP ainda
+  for do mesmo usuário) sem renovar o `SeenAt`.
+- Teste que trava: `TestRefreshSessionsDoesNotKeepSessionAlive`. Com o `Upsert`
+  no lugar: "a sessão sem eventos deveria ter expirado (expiradas: 0)".
+
+### Observação: "Reaplicar tabelas" com muitas sessões
+A reconsulta do AD é sequencial e a tela espera até 20 s pela resposta. Com
+centenas de sessões ativas o botão pode estourar esse tempo (a reconsulta segue
+no serviço, mas a tela mostra erro). Não medido no laboratório.
 
 ### Observação: a política leva até 1 minuto para mudar
 O daemon aplica na hora (o logon do D3 chegou às 17:20:00 e a tabela mudou no
