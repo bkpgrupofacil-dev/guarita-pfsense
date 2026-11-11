@@ -31,30 +31,44 @@ vem de horas de testes anteriores e evita retrabalho.
 
 | Componente | Situação |
 |---|---|
-| Serviço `guaritad` (Go) | 51 testes unitários + 33 verificações de integração (Linux, `pfctl` falso) |
-| Pacote no pfSense **2.7.2** | Instalado e verificado numa VM: 33/33 em `build/verify-on-pfsense.sh` |
-| Pacote no pfSense **2.8 / 2.9** | **Nunca rodou.** Só comparação do código-fonte das 20 funções do pfSense usadas |
-| Agente PowerShell | **Nunca rodou.** Formato do JSON e assinatura HMAC conferidos contra o serviço por um equivalente em Python (`build/ps_mimic.py`), mas o script em si nunca foi executado |
-| LDAP contra um AD real | **Nunca rodou.** Só a interpretação de DNs e o cache têm testes |
-| Logon real de usuário até a regra do firewall | **Nunca rodou** |
+| Serviço `guaritad` (Go) | Testes unitários + 33 verificações de integração (Linux, `pfctl` falso). Os testes de `cmd/guaritad` só compilam fora do Windows (`log/syslog`) |
+| Pacote no pfSense **2.7.2** | Instalado e verificado numa VM: 33/33 na versão antiga de `build/verify-on-pfsense.sh` |
+| Pacote no pfSense **2.9.0** | **Rodou** no laboratório de 2026-11-10/11: 43/43 no verify atual (0.1.2), fases A a E completas. Ver `docs/RESULTADOS-LAB.md` |
+| Pacote no pfSense **2.8** | Nunca rodou |
+| Agente PowerShell | **Rodou** num DC Windows Server 2008 R2 SP1 em pt-BR, com PowerShell 2.0 nativo. As funções têm testes em `build/test-agent.ps1` |
+| LDAP contra um AD real | **Rodou** contra o AD 2008 R2: grupo direto, aninhado e primário |
+| Logon real de usuário até a regra do firewall | **Rodou**: bloqueio por usuário e troca de política na mesma estação |
 
-Os quatro itens "nunca rodou" são o objetivo deste laboratório. O agente
-PowerShell é o mais arriscado: espere encontrar defeitos nele.
+O primeiro laboratório encontrou e corrigiu 20 defeitos (lista em
+`docs/RESULTADOS-LAB.md`). Ainda não rodou: pfSense 2.8, Windows Server 2012 R2
+ou mais novo, e DC em inglês.
 
 ### Defeitos já encontrados e corrigidos (para não reintroduzir)
 
 1. Alias do tipo `urltable` com caminho local não gera tabela no pf. Os aliases
    são `host` com lista vazia, que viram `table <nome> persist`.
 2. Cada recarga de filtro esvazia essas tabelas. O daemon observa
-   `/tmp/rules.debug` e repõe.
+   `/tmp/rules.debug` **e** `/var/run/filter_reload_status` e repõe. No 2.9, uma
+   recarga sem mudança no ruleset não reescreve o `rules.debug`, mas esvazia as
+   tabelas mesmo assim.
 3. `lookup_ca()` mudou de formato entre 2.7 e 2.8 (`guarita_lookup_ca_cert()`).
 4. Caminhos do plist eram relativos ao `/usr/local` e saíam duplicados.
 5. Acentos em campos que vão para o `config.xml` corrompiam o arquivo no
    2.7.x. Verificado no build por `build/check-config-ascii.py`.
 6. O `<facilityname>` do `info.xml` é filtro de **programa** do syslog, não
    facility. Tem de ser `guaritad`.
-7. O agente aceitava eventos de **falha** de autenticação como logon. Corrigido
-   por último e **sem execução**: é o primeiro teste da fase C6 abaixo.
+7. O agente aceitava eventos de **falha** de autenticação como logon. Testado
+   no C6 do laboratório: um 4768 de falha não vira sessão.
+8. O campo `authserver` está em `listtags()` do pfSense e volta do `config.xml`
+   como lista. Leia sempre por `guarita_authserver_name()`.
+9. Nas páginas em `/usr/local/www`, nunca use `$g` ou `$config` como variável:
+   são globais do pfSense (`build/check-page-globals.sh`).
+10. No agente, nada de `$PSScriptRoot`, nomes de conta em inglês, `auditpol` por
+    nome, `& schtasks` direto nem `/TR` (`build/check-agent-compat.sh`).
+11. O AD não lista o grupo **primário** no `memberOf`; o daemon o resolve pelo
+    `primaryGroupID`.
+12. A reconsulta de grupos não pode renovar a sessão (`UpdateGroups`, não
+    `Upsert`), senão as sessões nunca expiram.
 
 ---
 
@@ -132,29 +146,32 @@ Siga a ordem. Cada fase depende da anterior.
 ### Fase A — o pacote no pfSense 2.9.0
 
 **A1. Instalar.** Gere o tarball com `sh build/build.sh` (precisa de Go 1.24+
-e Python 3) ou use o `guarita-0.1.1.tar.gz` que o usuário tem. Descarte
-qualquer tarball `0.1.0`: houve dois builds diferentes com esse número e o
-primeiro não instala.
+e Python 3). Descarte qualquer tarball `0.1.0` (houve dois builds diferentes
+com esse número e o primeiro não instala) e `0.1.1` (sem as correções do
+laboratório do 2.9.0). O `build.sh` também roda no Git Bash do Windows, com o Go
+instalado; os testes de `cmd/guaritad` não compilam no Windows e precisam ser
+compilados para FreeBSD (`GOOS=freebsd go test -c ./cmd/guaritad`) e rodados no
+pfSense.
 
 ```bash
-scp dist/guarita-0.1.1.tar.gz admin@<IP>:/tmp/
+scp dist/guarita-0.1.2.tar.gz admin@<IP>:/tmp/
 ```
 
 ```bash
-ssh admin@<IP> 'cd /tmp && tar -xzf guarita-0.1.1.tar.gz && cd guarita-0.1.1 && sh install.sh'
+ssh admin@<IP> 'cd /tmp && tar -xzf guarita-0.1.2.tar.gz && cd guarita-0.1.2 && sh install.sh'
 ```
 
-Esperado: termina com "Guarita 0.1.1 instalado" e o pacote aparece em
+Esperado: termina com "Guarita 0.1.2 instalado" e o pacote aparece em
 **System > Package Manager > Installed Packages**. Confira também que **não**
 apareceu `/cf/conf/config.xml.bad` (sinal de `config.xml` corrompido).
 
 **A2. Verificação mecânica.** Primeira execução real no 2.9.0:
 
 ```bash
-ssh admin@<IP> 'sh /tmp/guarita-0.1.1/verify-on-pfsense.sh'
+ssh admin@<IP> 'sh /tmp/guarita-0.1.2/verify-on-pfsense.sh'
 ```
 
-Esperado: `passaram: 33  falharam: 0`, seguido de "configurações e grupos de
+Esperado: `passaram: 43  falharam: 0`, seguido de "configurações e grupos de
 antes do teste restaurados". **Qualquer falha aqui é a prioridade número um.**
 
 O A2 é também o primeiro teste real da **restauração** que o script faz no fim
@@ -227,7 +244,8 @@ máquina (terminadas em `$`) não podem aparecer.
 nunca executada:
 
 1. Ligue também a auditoria de **falha**:
-   `auditpol /set /subcategory:"Kerberos Authentication Service" /failure:enable`
+   `auditpol /set /subcategory:"{0CCE9242-69AE-11D9-BED3-505054503030}" /failure:enable`
+   (pelo GUID: o nome em inglês dá "Erro 0x00000057" num Windows em outro idioma)
 2. Na estação, provoque um 4768 de falha com um usuário que não existe:
    `runas /user:<DOMINIO>\naoexiste cmd` (digite qualquer senha).
 3. No Visualizador de Eventos do DC, confirme que surgiu um 4768 de **falha**.
@@ -239,8 +257,9 @@ assumir a política de outro usuário. É um defeito de segurança; corrija ante
 de seguir.
 
 **C7. PowerShell 2.0.** O DC de produção é **Windows Server 2008**, que roda
-PowerShell 2.0. Esse caminho do código nunca rodou e é o que mais importa.
-Num Windows Server 2016 a 2022 dá para testar o motor 2.0:
+PowerShell 2.0. Num DC 2008 ou 2008 R2 o motor 2.0 é o nativo, e o C3 a C6 já
+o exercitam (no primeiro laboratório foi assim, num 2008 R2 em pt-BR). Num
+Windows Server 2016 a 2022 dá para testar o motor 2.0:
 
 ```powershell
 Install-WindowsFeature NET-Framework-Core, PowerShell-V2
@@ -333,7 +352,7 @@ ssh admin@<IP> "sed 's/\"bind_pw\".*/\"bind_pw\": \"oculto\",/; s/\"agent_secret
 | Passo | Resultado | Observação |
 |---|---|---|
 | A1 instalar | ok / falhou | |
-| A2 verify 33/33 | | |
+| A2 verify 43/43 | | |
 | ... | | |
 
 ## Defeitos encontrados

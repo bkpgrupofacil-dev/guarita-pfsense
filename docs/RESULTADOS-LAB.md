@@ -1,5 +1,31 @@
 # Resultados do laboratório
 
+## Resumo
+
+Primeira execução real do Guarita: pfSense 2.9.0, AD em Windows Server 2008 R2
+(pt-BR, PowerShell 2.0) e estação Windows 10. As fases A a E rodaram até o fim.
+
+- **O conceito funciona.** Na mesma estação, `leandrobloq` teve o site
+  bloqueado e, depois do logon de `leandroliberado`, o IP trocou de tabela no
+  mesmo segundo em que o logon chegou e o site abriu (D2, D3).
+- **20 defeitos encontrados e corrigidos**, cada um com teste ou verificação
+  que o trava. Os mais graves:
+  - (3) no 2.9, salvar qualquer configuração deixava os usuários restritos sem
+    restrição por até 1 minuto;
+  - (5) o servidor LDAP escolhido nunca chegava ao serviço;
+  - (8) o grupo primário do AD (por exemplo "Usuários do domínio") era ignorado;
+  - (9 a 12) o instalador do agente não funcionava num DC 2008 R2 em português,
+    e deixava o segredo legível por qualquer usuário;
+  - (13) a segunda barreira contra eventos de falha do Kerberos estava desligada;
+  - (16) uma segunda instância no boot podia fazer as configurações salvas nunca
+    chegarem ao serviço;
+  - (19) as sessões nunca expiravam enquanto a reconsulta de grupos funcionasse.
+- **Pontos de atenção** (não corrigidos, ver as observações no fim): a política
+  leva até 1 minuto para mudar depois do logon, porque o agente roda como tarefa
+  agendada a cada minuto, e "Reaplicar tabelas" pode passar do tempo da tela com
+  centenas de sessões.
+- Versão: **0.1.2**. `verify-on-pfsense.sh`: **43/43** no 2.9.0.
+
 ## Ambiente
 - Data: 2026-11-10/11
 - Hipervisor: Hyper-V (Windows 11 Pro). VMs do domínio na rede interna
@@ -12,8 +38,10 @@
   - `leandroliberado`, no grupo `liberado`
   - `leandrobloq`, no grupo `bloqueio`
   - `leandro`, no grupo `interno`, que é membro de `liberado` (aninhado)
-- Acesso: SSH com chave ao pfSense (admin). Comandos no DC rodados pelo usuário,
-  com a saída colada. Logons na estação feitos pelo usuário.
+- Acesso: SSH com chave ao pfSense (admin). No DC (2008 R2, sem OpenSSH), roteiros
+  servidos por um servidor HTTP temporário no pfSense (`php -S`, só na LAN), rodados
+  pelo usuário, que devolviam a saída ao mesmo servidor com o segredo apagado.
+  Logons na estação feitos pelo usuário.
 - Tarball: `guarita-0.1.1.tar.gz` (sha256 `5c36364a91e44978daea1d9c09855a03b746d4fe8d37038060a2517d20642961`),
   conferido contra a `main` 6ad1a16 (scripts do agente e `verify-on-pfsense.sh` idênticos).
 
@@ -24,11 +52,12 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | Passo | Resultado | Observação |
 |---|---|---|
 | A1 instalar 0.1.1 | ok | "Guarita 0.1.1 instalado", sem `config.xml.bad` |
-| A2 verify 0.1.1 | **falhou** | 33 ok, 1 falha (passo 8). Restauração da config ok, mas a tabela `guarita_teste` ficou no pf. Ver defeitos 1, 2 e 3 |
 | A1 instalar 0.1.2 (por cima da 0.1.1) | ok | "versão 0.1.1 já instalada; atualizando para 0.1.2", sem `config.xml.bad` |
-| A2 verify 0.1.2 | ok | 36/36 em duas rodadas seguidas; restauração ok e tabela de teste removida do pf |
+| A2 verify 0.1.1 | **falhou** | 33 ok, 1 falha (passo 8). Restauração da config ok, mas a tabela `guarita_teste` ficou no pf. Ver defeitos 1, 2 e 3 |
+| A2 verify 0.1.2 | ok | 36/36 em duas rodadas seguidas; restauração ok e tabela de teste removida do pf. Com os passos acrescentados ao longo do laboratório, o verify final dá 43/43 |
 | A3 telas | **falhou**, corrigido | A aba Sessões quebrava o rodapé do pfSense e gerava "crash report". Ver defeito 4. Depois da correção: as 5 abas sem erro, `PHP_errors.log` sem linhas novas |
 | B1 servidor LDAP | ok | AD `dc01` (192.168.1.10:389), bind com conta comum; "Select a container" listou `CN=Users`, `OU=TESTE` e `OU=Domain Controllers`. O pfSense só habilita esse botão com o campo de containers já preenchido |
+| B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 | B3 grupos | ok | `liberado` (AD `liberado`, prio 0) e `bloqueio` (AD `bloqueio`, prio 10), salvos pela interface. Nome amigável "Bloqueio de Navegação": gravado em UTF-8 no `config.xml`, que continuou bem formado e sem `config.xml.bad`; chegou ao alias, ao JSON do daemon e à tela de Status |
 | B4 testar usuários | **falhou**, corrigido | Antes: os usuários voltavam sem grupo nenhum (defeito 8). Depois: `leandroliberado` -> `liberado`, `leandrobloq` -> `bloqueio`; `naoexiste` -> "não encontrado no AD" |
 | B5 grupo aninhado | ok | `leandro` em `interno`, que está em `liberado`. Aninhados ligado: AD `interno,liberado` -> `liberado`. Desligado: AD `interno` -> nenhum grupo do Guarita |
@@ -47,7 +76,6 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | E3 mudança de grupo no AD | **falhou**, corrigido | `leandroliberado` movido de `liberado` para `bloqueio` no AD, sem logoff. "Testar um usuário" já mostrava `bloqueio`, mas "Reaplicar tabelas" não mudou a sessão (defeito 18). Depois da correção: a sessão e o IP passaram para `bloqueio` na hora, e o `seen_at` não foi renovado |
 | E4 sessões expiram sem o agente | **falhou**, corrigido | Duração baixada para 2 min na configuração: o serviço seguiu com 4 h (defeito 20). Depois da correção, com a tarefa do agente desabilitada, a sessão expirou sozinha ("1 sessão(ões) expiradas por inatividade") e o IP saiu da tabela. Duração voltou a 240 min |
 | E5 segredo novo | ok | Segredo trocado: o agente com o antigo foi recusado a cada minuto ("agente DC01 rejeitado: assinatura inválida"; no agente, "(401) Não Autorizado"), com os recusados subindo de 0 para 4 e nenhuma sessão criada. Reconfigurado com o novo pelo instalador: eventos aceitos de novo, e o logon pendente foi reenviado, porque o agente não avança o estado quando o envio falha. A resposta real do agente mostrou "IP do próprio firewall ignorado: 192.168.1.1 (guarita)" (defeito 14) |
-| B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
 
