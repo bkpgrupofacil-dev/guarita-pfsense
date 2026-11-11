@@ -47,6 +47,12 @@ if ! python3 build/check-config-ascii.py \
 	exit 1
 fi
 
+echo "==> conferindo que as paginas nao sobrescrevem globais do pfSense"
+if ! sh build/check-page-globals.sh pkg/pfsense/files/usr/local/www/*.php; then
+	echo "build abortado: veja acima" >&2
+	exit 1
+fi
+
 # -------------------------------------------------------- binário FreeBSD
 echo "==> compilando guaritad para freebsd/amd64"
 mkdir -p "$STAGE/usr/local/sbin"

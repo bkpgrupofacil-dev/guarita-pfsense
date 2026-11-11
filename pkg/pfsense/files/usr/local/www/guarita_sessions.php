@@ -206,8 +206,8 @@ if ($running && is_array($sessions)) {
 						<?php if (empty($grupos)): ?>
 							<span class="text-muted"><?= gettext("nenhum") ?></span>
 						<?php else: ?>
-							<?php foreach ($grupos as $g): ?>
-								<span class="label label-info"><?= htmlspecialchars($g) ?></span>
+							<?php foreach ($grupos as $grupo): ?>
+								<span class="label label-info"><?= htmlspecialchars($grupo) ?></span>
 							<?php endforeach ?>
 						<?php endif ?>
 					</td>

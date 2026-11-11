@@ -27,6 +27,9 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | A2 verify 0.1.1 | **falhou** | 33 ok, 1 falha (passo 8). Restauração da config ok, mas a tabela `guarita_teste` ficou no pf. Ver defeitos 1, 2 e 3 |
 | A1 instalar 0.1.2 (por cima da 0.1.1) | ok | "versão 0.1.1 já instalada; atualizando para 0.1.2", sem `config.xml.bad` |
 | A2 verify 0.1.2 | ok | 36/36 em duas rodadas seguidas; restauração ok e tabela de teste removida do pf |
+| A3 telas | **falhou**, corrigido | A aba Sessões quebrava o rodapé do pfSense e gerava "crash report". Ver defeito 4. Depois da correção: as 5 abas sem erro, `PHP_errors.log` sem linhas novas |
+| B1 servidor LDAP | ok | AD `dc01` (192.168.1.10:389), bind com conta comum; "Select a container" listou `CN=Users`, `OU=TESTE` e `OU=Domain Controllers`. O pfSense só habilita esse botão com o campo de containers já preenchido |
+| B2 configurações | ok | Habilitado, servidor `dc01`, escuta em 192.168.1.1:8923 |
 
 ## Defeitos encontrados
 
@@ -69,6 +72,22 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
   verify, que agora espera as reposições anteriores terminarem e exige que o
   daemon note a recarga. Com o daemon 0.1.1: "tabela não reposta em 20 s" e
   "o daemon NÃO notou a recarga".
+
+### 4. As páginas sobrescreviam a variável global `$g` do pfSense
+- Sintoma: ao abrir **Services > Guarita > Sessões**, o pfSense registrou um
+  relatório de falha: `array_key_exists(): Argument #2 ($array) must be of type
+  array, string given in /etc/inc/globals.inc:745`, vindo de
+  `foot.inc -> print_credit() -> g_get()`.
+- Causa: as páginas rodam no escopo global do PHP, onde `$g` é o array de
+  configuração do sistema. `guarita_sessions.php` (grupos de cada sessão) e
+  `guarita_status.php` (tabela de grupos e o resultado de "Testar um usuário")
+  usavam `$g` como variável de laço. Quando o rodapé chamava `g_get()`, `$g` era
+  uma string.
+- Correção: variáveis de laço com outros nomes (`$grupo`, `$grp`, `$adgrp`,
+  `$lgrp`).
+- Teste que trava: `build/check-page-globals.sh`, chamado pelo `build.sh`, aborta
+  o build se uma página usar `$g` ou `$config` como variável de laço ou atribuir
+  a elas. Com as páginas antigas, ele aponta os 4 pontos e o build para.
 
 Os testes de `cmd/guaritad` não compilam no Windows (`log/syslog`): foram
 compilados para FreeBSD (`GOOS=freebsd go test -c`) e rodados dentro do pfSense.

@@ -181,13 +181,13 @@ if (empty($settings['enable'])) {
 				</tr>
 			</thead>
 			<tbody>
-<?php foreach ($status['groups'] as $g):
-	$pfcount = guarita_pf_table_count($g['pf_table']);
-	$insvc = (int) $g['members'];
+<?php foreach ($status['groups'] as $grp):
+	$pfcount = guarita_pf_table_count($grp['pf_table']);
+	$insvc = (int) $grp['members'];
 ?>
 				<tr>
-					<td><strong><?= htmlspecialchars($g['name']) ?></strong></td>
-					<td><code><?= htmlspecialchars($g['pf_table']) ?></code></td>
+					<td><strong><?= htmlspecialchars($grp['name']) ?></strong></td>
+					<td><code><?= htmlspecialchars($grp['pf_table']) ?></code></td>
 					<td><?= $insvc ?></td>
 					<td>
 						<?php if ($pfcount === null): ?>
@@ -206,7 +206,7 @@ if (empty($settings['enable'])) {
 						<a href="/firewall_rules.php" class="btn btn-xs btn-default">
 							<?= gettext("ver regras") ?>
 						</a>
-						<a href="/diag_tables.php?type=<?= urlencode($g['pf_table']) ?>"
+						<a href="/diag_tables.php?type=<?= urlencode($grp['pf_table']) ?>"
 						   class="btn btn-xs btn-default">
 							<?= gettext("ver tabela") ?>
 						</a>
@@ -260,8 +260,8 @@ if (empty($settings['enable'])) {
 				<?php if (empty($ldap_test['ad_groups'])): ?>
 					<span class="text-muted"><?= gettext("nenhum grupo devolvido") ?></span>
 				<?php else: ?>
-					<?php foreach ((array) $ldap_test['ad_groups'] as $g): ?>
-						<span class="label label-default"><?= htmlspecialchars($g) ?></span>
+					<?php foreach ((array) $ldap_test['ad_groups'] as $adgrp): ?>
+						<span class="label label-default"><?= htmlspecialchars($adgrp) ?></span>
 					<?php endforeach ?>
 				<?php endif ?>
 			</dd>
@@ -273,8 +273,8 @@ if (empty($settings['enable'])) {
 						<?= gettext("nenhum — nenhum grupo do AD acima casa com os grupos cadastrados") ?>
 					</span>
 				<?php else: ?>
-					<?php foreach ((array) $ldap_test['logical'] as $g): ?>
-						<span class="label label-info"><?= htmlspecialchars($g) ?></span>
+					<?php foreach ((array) $ldap_test['logical'] as $lgrp): ?>
+						<span class="label label-info"><?= htmlspecialchars($lgrp) ?></span>
 					<?php endforeach ?>
 					<br><small class="text-muted">
 						<?= gettext("No logon real vale apenas o de maior prioridade (menor número).") ?>
