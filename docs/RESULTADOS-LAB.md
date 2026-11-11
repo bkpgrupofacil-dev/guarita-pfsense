@@ -45,6 +45,8 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | E1 reinício | ok, com ressalva | Reboot pelo sistema: a sessão `leandroliberado` foi restaurada do disco e o IP voltou a `guarita_liberado` 1 s depois de o serviço subir. Ressalva: o pfSense iniciou o serviço duas vezes no boot, e isso expôs o defeito 16 |
 | E2 recarga do filtro | ok | Salvar a configuração sem mudar o ruleset esvaziou a tabela, e ela foi reposta sozinha em cerca de 7 s, com "o filtro do pfSense foi recarregado; repondo as tabelas" (depende da correção do defeito 3) |
 | E3 mudança de grupo no AD | **falhou**, corrigido | `leandroliberado` movido de `liberado` para `bloqueio` no AD, sem logoff. "Testar um usuário" já mostrava `bloqueio`, mas "Reaplicar tabelas" não mudou a sessão (defeito 18). Depois da correção: a sessão e o IP passaram para `bloqueio` na hora, e o `seen_at` não foi renovado |
+| E4 sessões expiram sem o agente | **falhou**, corrigido | Duração baixada para 2 min na configuração: o serviço seguiu com 4 h (defeito 20). Depois da correção, com a tarefa do agente desabilitada, a sessão expirou sozinha ("1 sessão(ões) expiradas por inatividade") e o IP saiu da tabela. Duração voltou a 240 min |
+| E5 segredo novo | ok | Segredo trocado: o agente com o antigo foi recusado a cada minuto ("agente DC01 rejeitado: assinatura inválida"; no agente, "(401) Não Autorizado"), com os recusados subindo de 0 para 4 e nenhuma sessão criada. Reconfigurado com o novo pelo instalador: eventos aceitos de novo, e o logon pendente foi reenviado, porque o agente não avança o estado quando o envio falha. A resposta real do agente mostrou "IP do próprio firewall ignorado: 192.168.1.1 (guarita)" (defeito 14) |
 | B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
@@ -268,6 +270,18 @@ depois de corrigir o anterior:
   for do mesmo usuário) sem renovar o `SeenAt`.
 - Teste que trava: `TestRefreshSessionsDoesNotKeepSessionAlive`. Com o `Upsert`
   no lugar: "a sessão sem eventos deveria ter expirado (expiradas: 0)".
+
+### 20. Mudar a duração da sessão não tinha efeito até reiniciar o serviço
+- Sintoma: no E4, a duração foi baixada para 2 minutos na configuração e o
+  `guarita.json` mudou, mas o serviço continuou expirando sessões com 4 horas.
+- Causa: o TTL só era lido na criação do gerenciador de sessões; o SIGHUP
+  (`ReloadConfig`) atualizava o TTL do cache de grupos, mas não o das sessões.
+- Correção: `session.SetTTL`, chamado pelo `ReloadConfig`. A leitura do TTL em
+  `ExpireOlderThan` passou para dentro do lock.
+- Teste que trava: `TestReloadConfigAppliesSessionTTL` (monta o daemon, troca o
+  TTL no arquivo e chama `ReloadConfig`). Sem a chamada: "com o TTL novo de 1 s a
+  sessão deveria ter expirado (expiradas: 0)". No pfSense, o TTL trocado com o
+  serviço rodando (mesmo PID, só SIGHUP) fez uma sessão de teste expirar.
 
 ### Observação: "Reaplicar tabelas" com muitas sessões
 A reconsulta do AD é sequencial e a tela espera até 20 s pela resposta. Com

@@ -3,11 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"log"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/grupofacil/guarita/internal/config"
 	"github.com/grupofacil/guarita/internal/session"
 )
 
@@ -43,6 +48,42 @@ func TestRefreshSessionsKeepsGroupsOnError(t *testing.T) {
 	s, _ := m.Lookup(ip)
 	if len(s.Groups) != 1 || s.Groups[0] != "liberado" {
 		t.Fatalf("grupos = %v, quero [liberado]", s.Groups)
+	}
+}
+
+type nopRunner struct{}
+
+func (nopRunner) ReplaceTable(string, string) error { return nil }
+func (nopRunner) FlushTable(string) error           { return nil }
+
+// E4 do laboratório: a "duração da sessão" foi baixada na interface para
+// testar a expiração, mas o serviço só lia o TTL ao iniciar e o SIGHUP não o
+// trocava. A sessão seguia com o TTL antigo de 4 horas.
+func TestReloadConfigAppliesSessionTTL(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "guarita.json")
+	write := func(ttl int) {
+		js := fmt.Sprintf(`{"agent_secret":"segredo-bem-longo-aqui","session_ttl":%d,`+
+			`"state_path":%q,"table_dir":%q}`, ttl, filepath.Join(dir, "s.json"), filepath.Join(dir, "t"))
+		if err := os.WriteFile(cfgPath, []byte(js), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(14400)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := newDaemon(cfg, cfgPath, log.New(io.Discard, "", 0), nopRunner{})
+	d.sessions.Upsert(netip.MustParseAddr("192.168.1.100"), "leandro", "TESTE", []string{"liberado"}, "ad-agent")
+
+	write(1) // 1 segundo
+	if err := d.ReloadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if n := d.sessions.ExpireOlderThan(); n != 1 {
+		t.Fatalf("com o TTL novo de 1 s a sessão deveria ter expirado (expiradas: %d)", n)
 	}
 }
 

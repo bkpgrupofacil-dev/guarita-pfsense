@@ -640,6 +640,7 @@ func (d *daemon) ReloadConfig() error {
 	d.mu.Unlock()
 
 	d.resolver.Reload(cfg)
+	d.sessions.SetTTL(cfg.SessionTTL.D())
 	d.cache.SetTTL(cfg.GroupRefresh.D())
 	d.cache.Purge()
 	d.agentSrv.SetSecret(cfg.AgentSecret)

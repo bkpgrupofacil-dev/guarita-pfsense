@@ -89,6 +89,15 @@ func (m *Manager) Upsert(ip netip.Addr, user, domain string, groups []string, so
 	return changed
 }
 
+// SetTTL troca a duração das sessões (SIGHUP). Antes o TTL só era lido na
+// criação do Manager: mudar a "duração da sessão" na interface não tinha efeito
+// até o serviço reiniciar.
+func (m *Manager) SetTTL(ttl time.Duration) {
+	m.mu.Lock()
+	m.ttl = ttl
+	m.mu.Unlock()
+}
+
 // UpdateGroups troca só os grupos de uma sessão existente, depois de
 // reconsultar o AD. NÃO renova o SeenAt: quem diz que o usuário continua na
 // estação são os eventos do agente, não a reconsulta. Antes a reconsulta usava
@@ -184,11 +193,12 @@ type RefreshItem struct {
 // ExpireOlderThan remove sessões não-fixas com SeenAt anterior a agora-ttl.
 // Devolve quantas foram removidas.
 func (m *Manager) ExpireOlderThan() int {
+	m.mu.Lock()
 	if m.ttl <= 0 {
+		m.mu.Unlock()
 		return 0
 	}
 	cutoff := time.Now().Add(-m.ttl)
-	m.mu.Lock()
 	n := 0
 	for ip, s := range m.byIP {
 		if s.Sticky {
