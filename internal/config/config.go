@@ -48,6 +48,13 @@ type Config struct {
 	// Vazio desliga a observação.
 	RulesFile string `json:"rules_file"`
 
+	// ReloadStatusFile é o arquivo de progresso que o pfSense reescreve em
+	// TODA recarga de filtro (normalmente /var/run/filter_reload_status).
+	// Desde o 2.8/2.9, quando o ruleset não mudou, o pfSense pula a recarga e
+	// não reescreve o RulesFile, mas ainda roda o "pfctl -T flush" das nossas
+	// tabelas. Só este arquivo denuncia esse caso. Vazio desliga a observação.
+	ReloadStatusFile string `json:"reload_status_file"`
+
 	// ReapplyInterval é o intervalo da reaplicação periódica das tabelas, como
 	// rede de segurança para qualquer coisa que as esvazie sem passar pelo
 	// arquivo de regras. Zero desliga.
@@ -174,6 +181,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.RulesFile == "" {
 		c.RulesFile = "/tmp/rules.debug"
+	}
+	if c.ReloadStatusFile == "" {
+		c.ReloadStatusFile = "/var/run/filter_reload_status"
 	}
 	if c.ReapplyInterval == 0 {
 		c.ReapplyInterval = Duration(60 * time.Second)

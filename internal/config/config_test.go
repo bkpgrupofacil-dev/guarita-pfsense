@@ -40,6 +40,12 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if c.LogFacility != "local4" {
 		t.Errorf("LogFacility = %q", c.LogFacility)
 	}
+	// O pfSense 2.9 pula a recarga quando o ruleset não mudou e não reescreve
+	// o rules.debug, mas esvazia as tabelas mesmo assim. O arquivo de status é
+	// o único sinal que muda em toda recarga.
+	if c.ReloadStatusFile != "/var/run/filter_reload_status" {
+		t.Errorf("ReloadStatusFile = %q", c.ReloadStatusFile)
+	}
 }
 
 func TestLDAPSPortDefault(t *testing.T) {

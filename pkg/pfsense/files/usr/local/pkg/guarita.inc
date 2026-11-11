@@ -621,6 +621,16 @@ function guarita_resync_config() {
 		if (guarita_is_running()) {
 			stop_service('guaritad');
 		}
+		/*
+		 * Recarrega o filtro também ao desabilitar. Sem isso, um alias que
+		 * guarita_sync_aliases() acabou de tirar do config.xml continuava como
+		 * tabela no pf, e as tabelas que ficaram guardavam os IPs das últimas
+		 * sessões: com o serviço parado, ninguém mais as atualizava, e as
+		 * regras seguiam aplicando a política de usuários que já tinham saído.
+		 * A recarga tira as tabelas removidas e esvazia as que ficaram
+		 * (aliases "host" vazios), que é o estado certo para "desabilitado".
+		 */
+		filter_configure();
 		return;
 	}
 

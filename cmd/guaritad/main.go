@@ -32,7 +32,7 @@ import (
 )
 
 // Version é preenchida no build via -ldflags.
-var Version = "0.1.1-dev"
+var Version = "0.1.2-dev"
 
 func main() {
 	var (
@@ -323,12 +323,7 @@ func (d *daemon) filterWatchLoop() {
 	defer d.wg.Done()
 
 	cfg := d.snapshotCfg()
-	var lastMod time.Time
-	if cfg.RulesFile != "" {
-		if fi, err := os.Stat(cfg.RulesFile); err == nil {
-			lastMod = fi.ModTime()
-		}
-	}
+	watch := newReloadWatcher(cfg.RulesFile, cfg.ReloadStatusFile)
 
 	check := time.NewTicker(5 * time.Second)
 	defer check.Stop()
@@ -346,18 +341,9 @@ func (d *daemon) filterWatchLoop() {
 			return
 
 		case <-check.C:
-			cfg = d.snapshotCfg()
-			if cfg.RulesFile == "" {
+			if _, ok := watch.changed(); !ok {
 				continue
 			}
-			fi, err := os.Stat(cfg.RulesFile)
-			if err != nil {
-				continue
-			}
-			if fi.ModTime().Equal(lastMod) {
-				continue
-			}
-			lastMod = fi.ModTime()
 			d.log.Printf("o filtro do pfSense foi recarregado; repondo as tabelas")
 			// Reaplica algumas vezes para passar por cima do flush que o
 			// pfSense agenda depois da recarga, qualquer que seja a ordem.
