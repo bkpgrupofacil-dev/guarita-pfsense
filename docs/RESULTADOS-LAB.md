@@ -36,6 +36,12 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | C2 alcance da porta 8923 | ok | DC -> 192.168.1.1:8923 conecta (regra padrão "LAN to any") |
 | C3 teste de conexão | ok | `-TestOnly` no PowerShell 2.0: "ok, o pfSense respondeu: {"ok":true,...}" |
 | C4 instalação | **falhou**, corrigido | Quatro defeitos em sequência (9 a 12). Depois: tarefa "Guarita Agent" como SISTEMA a cada 1 min, último resultado 0; `secret.txt` só com SISTEMA e Administradores; auditoria lida pelo GUID |
+| C5 dry-run | ok, com ressalvas | `logon leandrobloq 192.168.1.100`, sem contas de máquina. A linha sai com `(id 4624)` e não `(id 4768)`: o agente deduplica por (tipo, usuário, IP) e o 4624 do mesmo logon vem antes. Apareceram também os defeitos 14 e 15 |
+| C6 falha de Kerberos | ok | Auditoria de falha ligada pelo GUID. `runas /user:TESTE\naoexiste` gerou um 4768 de falha (status 6, de 192.168.1.100). O `naoexiste` não aparece no `-DryRun` nem em Sessões |
+| C7 PowerShell 2.0 | ok | Todo o C3 a C6 rodou no motor 2.0, nativo do 2008 R2 ("agente Guarita iniciando em DC01 (PowerShell 2.0)") |
+| D1 logon restrito | ok | `leandrobloq` -> sessão no grupo `bloqueio` e 192.168.1.100 em `guarita_bloqueio`, até 1 min depois do logon |
+| D2 bloqueio | ok | Regra de teste no topo da LAN (block `guarita_bloqueio` -> `example.com`, com log): o site não abriu; 82 bloqueios de 192.168.1.100 no log do firewall |
+| D3 teste cruzado | ok | Mesma estação, logon com `leandroliberado`: às 17:20:00 o IP saiu de `guarita_bloqueio` e entrou em `guarita_liberado` no mesmo segundo, os bloqueios pararam e o site abriu. Regra de teste removida |
 | B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
@@ -191,6 +197,41 @@ depois de corrigir o anterior:
   agente antigo, 4 falhas, entre elas "status 0x6 barra: obtido True".
 - Também: "nenhum evento encontrado" passa a ser reconhecido pelo
   `FullyQualifiedErrorId` (`NoMatchingEventsFound`), que não muda com o idioma.
+
+### 14. A conta de serviço do LDAP virava sessão no IP do próprio pfSense
+- Sintoma: `logon user=guarita ip=192.168.1.1` no log do daemon, e a sessão
+  "guarita 192.168.1.1" em Sessões.
+- Causa: quando o pfSense consulta o AD, o DC registra um logon de rede (4624
+  tipo 3) da conta de serviço vindo do IP do pfSense, e o agente o envia como se
+  fosse uma estação. Numa política apontada para "Usuários do domínio" (que
+  agora é resolvida, ver defeito 8), o próprio firewall entraria na tabela.
+- Correção: o daemon descarta eventos cujo IP pertence a uma interface do
+  próprio pfSense ("IP do próprio firewall ignorado"). Vale para qualquer
+  agente e qualquer conta.
+- Teste que trava: `TestIgnoresFirewallOwnIP` e `TestLocalInterfaceAddr` (Go).
+  No laboratório, depois da atualização, a conta `guarita` não voltou a
+  aparecer em Sessões.
+
+### 15. O nome do computador vinha com o texto da linha seguinte
+- Sintoma: `computer=Endereço da rede de origem:	192.168.1.100`.
+- Causa: no 4624 de rede em português, "Nome da Estação de Trabalho" vem vazio.
+  A expressão que procura o rótulo usava `\s*`, que casa a quebra de linha, e
+  pegava a linha seguinte.
+- Correção: `[ \t]*` no lugar de `\s*` e `\r?` antes do fim da linha (no .NET,
+  com `(?m)`, o `$` não casa antes do `\r` das mensagens do Windows).
+- Teste que trava: casos novos em `build/test-agent.ps1` (13/13). Com o agente
+  anterior: "nome da estacao vazio fica vazio: obtido 'Endereco da rede de
+  origem: 192.168.1.100'".
+
+### Observação: a política leva até 1 minuto para mudar
+O daemon aplica na hora (o logon do D3 chegou às 17:20:00 e a tabela mudou no
+mesmo segundo). A espera está no agente, que roda como tarefa agendada a cada
+1 minuto, o mínimo do Agendador do Windows. Enquanto o logon novo não chega, o IP
+segue com a política do usuário anterior, porque o logoff do Windows (4634/4647)
+não traz o IP e não é usado. No sentido "liberado -> restrito", um usuário
+restrito fica liberado por até 1 minuto. Não é defeito do teste; é uma melhoria
+possível: agente em modo contínuo (o script já tem, com `-IntervalSeconds`)
+rodando como serviço, ou assinatura de eventos (`EventLogWatcher`, .NET 3.5).
 
 Os testes de `cmd/guaritad` não compilam no Windows (`log/syslog`): foram
 compilados para FreeBSD (`GOOS=freebsd go test -c`) e rodados dentro do pfSense.

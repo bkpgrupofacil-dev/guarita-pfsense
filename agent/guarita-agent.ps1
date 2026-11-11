@@ -485,7 +485,11 @@ function Get-Field {
         if ($v -and $v -ne '-') { return $v.Trim() }
     }
     if ($Message -and $LabelPattern) {
-        $m = [regex]::Match($Message, "(?im)^\s*(?:$LabelPattern)\s*:\s*(.+?)\s*$")
+        # [ \t] e nao \s: \s casa a quebra de linha, e com o valor vazio (o
+        # "Nome da Estacao de Trabalho" do 4624 de rede, no 2008 R2 em
+        # portugues) a busca pulava para a linha seguinte e devolvia
+        # "Endereco da rede de origem: 192.168.1.100" como nome do computador.
+        $m = [regex]::Match($Message, "(?im)^[ \t]*(?:$LabelPattern)[ \t]*:[ \t]*([^\r\n]+?)[ \t]*\r?$")
         if ($m.Success) {
             $v = $m.Groups[1].Value.Trim()
             if ($v -and $v -ne '-') { return $v }
@@ -512,7 +516,7 @@ function Get-IpField {
         }
     }
     if ($Message) {
-        $m = [regex]::Match($Message, '(?im)^\s*(?:Endere.o de Rede de Origem|Endere.o do Cliente|Source Network Address|Client Address)\s*:\s*(\S+)\s*$')
+        $m = [regex]::Match($Message, '(?im)^[ \t]*(?:Endere.o de Rede de Origem|Endere.o do Cliente|Source Network Address|Client Address)[ \t]*:[ \t]*([^\s]+)[ \t]*\r?$')
         if ($m.Success) {
             $v = $m.Groups[1].Value.Trim()
             if ($v.StartsWith('::ffff:')) { $v = $v.Substring(7) }

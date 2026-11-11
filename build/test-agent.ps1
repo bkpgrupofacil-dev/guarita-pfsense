@@ -38,6 +38,16 @@ Check 'hexa em maiusculas vira minusculas' (Get-StatusField @('a','b','c','d','e
 Check 'campo que nao e codigo'             (Get-StatusField @('a','b','c','d','e','f','-') 6) ''
 Check 'indice alem do fim'                 (Get-StatusField @('a') 6) ''
 
+Write-Host "== Get-Field nao atravessa a quebra de linha"
+# Trecho da mensagem do 4624 de rede no 2008 R2 em portugues: o nome da estacao
+# vem vazio e a linha seguinte e o endereco de origem.
+$msg = "Informacoes de Rede:`r`n`tNome da Estacao de Trabalho:`t`r`n`tEndereco da rede de origem:`t192.168.1.100`r`n`tPorta de Origem:`t49700"
+Check 'nome da estacao vazio fica vazio' (Get-Field @() 11 $msg 'Nome da Estacao de Trabalho|Workstation Name') ''
+$msg2 = "`tNome da Estacao de Trabalho:`tDESKTOP-U4AD0AQ`r`n`tEndereco da rede de origem:`t192.168.1.100"
+Check 'nome da estacao preenchido' (Get-Field @() 11 $msg2 'Nome da Estacao de Trabalho|Workstation Name') 'DESKTOP-U4AD0AQ'
+$msg3 = "`tEndereco da Rede de Origem:`t`r`n`tPorta de Origem:`t49700"
+Check 'endereco vazio nao pega a linha seguinte' (Get-IpField @() $msg3) ''
+
 Write-Host "== Test-ShouldSend descarta falha de Kerberos"
 $IgnoreAccounts = @('SYSTEM'); $IgnoreNetworks = @()
 function Rec($status) {

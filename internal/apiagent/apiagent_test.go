@@ -47,7 +47,10 @@ func (f *fakeHandler) OnActivity(ip netip.Addr, user string) error {
 }
 
 func newTestServer(h Handler) *Server {
-	return New(secret, h, func(string, ...any) {})
+	s := New(secret, h, func(string, ...any) {})
+	// Os testes não podem depender das interfaces da máquina que os roda.
+	s.isLocal = func(netip.Addr) bool { return false }
+	return s
 }
 
 // signedRequest monta uma requisição assinada corretamente.
@@ -90,6 +93,44 @@ func TestAcceptsValidBatch(t *testing.T) {
 	}
 	if len(h.logoffs) != 1 || len(h.activity) != 1 {
 		t.Fatalf("logoffs=%v activity=%v", h.logoffs, h.activity)
+	}
+}
+
+// Caso real do laboratório: o DC registra o bind da conta de serviço do LDAP
+// (4624, tipo 3) vindo do IP do próprio pfSense, e o agente o enviava como
+// logon. Virava a sessão "guarita 192.168.1.1".
+func TestIgnoresFirewallOwnIP(t *testing.T) {
+	h := &fakeHandler{}
+	s := newTestServer(h)
+	s.isLocal = func(ip netip.Addr) bool { return ip == netip.MustParseAddr("192.168.1.1") }
+	batch := Batch{Agent: "DC01", Events: []Event{
+		{Type: "logon", User: "guarita", IP: "192.168.1.1", EventID: 4624},
+		{Type: "logon", User: "guarita", IP: "::ffff:192.168.1.1", EventID: 4624},
+		{Type: "activity", User: "guarita", IP: "192.168.1.1", EventID: 4769},
+		{Type: "logon", User: "leandrobloq", IP: "192.168.1.100", EventID: 4768},
+	}}
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, signedRequest(t, "/v1/events", batch, time.Now().Unix()))
+	var res Result
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Accepted != 1 || res.Ignored != 3 {
+		t.Fatalf("esperava 1 aceito e 3 ignorados: %+v", res)
+	}
+	if len(h.logons) != 1 || h.logons[0] != "leandrobloq@192.168.1.100" || len(h.activity) != 0 {
+		t.Fatalf("logons=%v activity=%v", h.logons, h.activity)
+	}
+}
+
+// O verificador padrão olha as interfaces de verdade: o loopback é sempre local
+// e um endereço de documentação (RFC 5737) nunca é.
+func TestLocalInterfaceAddr(t *testing.T) {
+	if !localInterfaceAddr(netip.MustParseAddr("127.0.0.1")) {
+		t.Error("127.0.0.1 deveria ser local")
+	}
+	if localInterfaceAddr(netip.MustParseAddr("203.0.113.77")) {
+		t.Error("203.0.113.77 não deveria ser local")
 	}
 }
 

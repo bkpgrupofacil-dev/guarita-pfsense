@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -111,6 +112,38 @@ type Server struct {
 
 	// Estatísticas simples expostas na GUI.
 	stats Stats
+
+	// isLocal diz se um IP pertence a esta máquina (o próprio pfSense).
+	// Trocável nos testes.
+	isLocal func(netip.Addr) bool
+}
+
+// localInterfaceAddr diz se ip está numa interface desta máquina.
+//
+// Por que: quando o pfSense consulta o AD com a conta de serviço do LDAP, o DC
+// registra um logon de rede (4624) dessa conta vindo do IP do pfSense, e o
+// agente o envia como se fosse uma estação. No laboratório isso criou a sessão
+// "guarita 192.168.1.1": o firewall entrava como usuário, e numa política
+// apontada para "Usuários do domínio" o próprio pfSense cairia na tabela. O
+// firewall nunca é a estação de um usuário.
+func localInterfaceAddr(ip netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		var raw net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			raw = v.IP
+		case *net.IPAddr:
+			raw = v.IP
+		}
+		if x, ok := netip.AddrFromSlice(raw); ok && x.Unmap() == ip {
+			return true
+		}
+	}
+	return false
 }
 
 // Stats guarda contadores e o último contato de cada agente.
@@ -123,7 +156,7 @@ type Stats struct {
 
 // New cria o servidor.
 func New(secret string, h Handler, logf func(string, ...any)) *Server {
-	s := &Server{handler: h, logf: logf}
+	s := &Server{handler: h, logf: logf, isLocal: localInterfaceAddr}
 	s.SetSecret(secret)
 	m := map[string]time.Time{}
 	s.stats.lastSeen.Store(&m)
@@ -273,6 +306,9 @@ func (s *Server) apply(ev Event) error {
 	ip = ip.Unmap()
 	if ip.IsLoopback() || ip.IsUnspecified() {
 		return fmt.Errorf("IP ignorado: %s", ip)
+	}
+	if s.isLocal != nil && s.isLocal(ip) {
+		return fmt.Errorf("IP do próprio firewall ignorado: %s (%s)", ip, user)
 	}
 
 	switch ev.Type {
