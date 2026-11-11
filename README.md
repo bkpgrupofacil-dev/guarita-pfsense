@@ -44,7 +44,7 @@ domínio e só lê o log de eventos.
 
 ---
 
-## O que esta versão (0.1.0) entrega
+## O que esta versão (0.1.x) entrega
 
 Esta é a **fase 1**: identidade e regras de firewall por usuário.
 
@@ -115,15 +115,15 @@ Fases seguintes, em ordem:
 ### 1. No pfSense
 
 ```bash
-fetch -o guarita-0.1.0.tar.gz <url-do-tarball>
+fetch -o guarita-<versão>.tar.gz <url-do-tarball>
 ```
 
 ```bash
-tar -xzf guarita-0.1.0.tar.gz
+tar -xzf guarita-<versão>.tar.gz
 ```
 
 ```bash
-cd guarita-0.1.0 && sh install.sh
+cd guarita-<versão> && sh install.sh
 ```
 
 O `install.sh` monta um pacote `.pkg` de verdade com o `pkg` do próprio
@@ -242,6 +242,8 @@ Depois do primeiro logon de um usuário do domínio:
 - **Status > System Logs > Guarita** mostra os logons.
 
 Roteiro de teste completo em [docs/TESTES.md](docs/TESTES.md).
+
+Para um laboratório com pfSense, controlador de domínio e estação de verdade, o plano detalhado — incluindo o que nunca rodou e as armadilhas conhecidas — está em [docs/TESTE-LOCAL.md](docs/TESTE-LOCAL.md).
 
 ---
 

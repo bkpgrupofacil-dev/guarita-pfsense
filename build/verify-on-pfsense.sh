@@ -1,10 +1,20 @@
 #!/bin/sh
-# verify.sh - roda DENTRO do pfSense e confere a instalação do Guarita.
+# verify-on-pfsense.sh - roda DENTRO do pfSense e confere a instalação do Guarita.
 #
 # Cobre o que não dá para testar fora de um pfSense de verdade:
 # registro no pkg e no config.xml, criação do alias, existência da tabela no
 # pf, geração do JSON do daemon, serviço no ar, API local e um evento de agente
 # ponta a ponta até o IP aparecer na tabela do firewall.
+#
+# USE EM LABORATÓRIO. Para testar, o script habilita o Guarita, faz o serviço
+# escutar em 127.0.0.1 e troca a lista de grupos por um grupo de teste. Ao
+# terminar — com sucesso, com falha ou com Ctrl+C — ele RESTAURA as
+# configurações e os grupos que existiam antes e apaga a sessão de teste. Sem
+# isso, rodar o script depois de configurar os grupos reais apagaria os grupos
+# e deixaria o agente do controlador de domínio sem conseguir falar com o
+# pfSense.
+#
+# Uso:  sh verify-on-pfsense.sh
 
 PASS=0
 FAIL=0
@@ -14,6 +24,52 @@ inf() { echo ""; echo "== $*"; }
 
 PKG=pfSense-pkg-Guarita
 PHP=/usr/local/bin/php
+BACKUP=/tmp/guarita-verify-backup.ser
+TEST_IP=192.168.99.50
+
+echo "pfSense $(cat /etc/version 2>/dev/null) | PHP $($PHP -r 'echo PHP_VERSION;' 2>/dev/null)"
+
+# Guarda as configurações e os grupos atuais do Guarita, para restaurar no fim.
+$PHP -r '
+require_once("config.inc");
+$b = [
+	"settings" => config_get_path("installedpackages/guarita", null),
+	"groups"   => config_get_path("installedpackages/guaritagroups", null),
+];
+/* serialize() e nao json_encode(): o JSON falha calado com bytes que nao sao
+ * UTF-8 valido, e o backup sairia vazio. */
+$data = serialize($b);
+if (file_put_contents("'"$BACKUP"'", $data) !== strlen($data)) { exit(1); }
+' || { echo "nao consegui salvar a configuracao atual; abortando sem mexer em nada"; exit 2; }
+
+restore_config() {
+	[ -f "$BACKUP" ] || return
+	echo ""
+	echo "== restaurando a configuracao anterior do Guarita"
+	$PHP -r '
+	require_once("config.inc");
+	require_once("/usr/local/pkg/guarita.inc");
+	/* Apaga a sessao de teste antes de restaurar, para o IP ficticio nao
+	 * acabar numa tabela de grupo real. */
+	guarita_remove_session("'"$TEST_IP"'");
+	$b = unserialize(file_get_contents("'"$BACKUP"'"));
+	if (!is_array($b)) { echo "  backup ilegivel; restaure manualmente\n"; exit(1); }
+	foreach (["settings" => "installedpackages/guarita",
+	          "groups"   => "installedpackages/guaritagroups"] as $k => $path) {
+		if ($b[$k] === null) {
+			config_del_path($path);
+		} else {
+			config_set_path($path, $b[$k]);
+		}
+	}
+	write_config("Guarita: verify-on-pfsense.sh restaurou a configuracao anterior");
+	guarita_resync_config();
+	echo "  configuracoes e grupos de antes do teste restaurados\n";
+	' 2>&1
+	rm -f "$BACKUP"
+}
+trap restore_config EXIT
+trap 'exit 130' INT TERM
 
 inf "1. registro no gerenciador de pacotes"
 if pkg info -e $PKG; then
@@ -172,7 +228,7 @@ $secret = $cfg["agent_secret"];
 $listen = $cfg["listen_agent"];
 $body = json_encode(["agent" => "DC-VERIFY", "events" => [[
 	"type" => "logon", "user" => "joao.teste", "domain" => "LAB",
-	"ip" => "192.168.99.50", "computer" => "PC-LAB", "event_id" => 4768,
+	"ip" => "192.168.99.50", /* = TEST_IP, removido no fim */ "computer" => "PC-LAB", "event_id" => 4768,
 	"time" => gmdate("Y-m-d\TH:i:s\Z"),
 ]]]);
 $ts = time();

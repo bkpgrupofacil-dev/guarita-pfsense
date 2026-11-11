@@ -32,7 +32,7 @@ import (
 )
 
 // Version é preenchida no build via -ldflags.
-var Version = "0.1.0-dev"
+var Version = "0.1.1-dev"
 
 func main() {
 	var (

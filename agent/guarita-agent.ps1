@@ -331,7 +331,14 @@ function Get-SecurityEvents {
         $idClause = ($ids | ForEach-Object { "EventID=$_" }) -join ' or '
         $msSince = [long] ([DateTime]::UtcNow - $since.ToUniversalTime()).TotalMilliseconds
         if ($msSince -lt 0) { $msSince = 1000 }
-        $xpath = "*[System[($idClause) and TimeCreated[timediff(@SystemTime) <= $msSince]]]"
+        # Somente auditoria de SUCESSO. O bit 0x0020000000000000
+        # (9007199254740992) do campo Keywords marca "Audit Success"; "Audit
+        # Failure" e 0x0010000000000000. Sem este filtro, num dominio que
+        # audita tambem as falhas, um pedido de ticket que FALHOU viraria uma
+        # sessao: qualquer maquina pode pedir um ticket Kerberos em nome de
+        # outro usuario, e o agente associaria esse usuario ao IP de quem
+        # tentou, que herdaria a politica de acesso dele.
+        $xpath = "*[System[($idClause) and band(Keywords,9007199254740992) and TimeCreated[timediff(@SystemTime) <= $msSince]]]"
         try {
             $results = @(Get-WinEvent -LogName Security -FilterXPath $xpath `
                           -MaxEvents $MaxEventsPerCycle -ErrorAction Stop)
@@ -343,8 +350,9 @@ function Get-SecurityEvents {
         }
     } else {
         # Caminho de compatibilidade para PowerShell 2.0 sem Get-WinEvent util.
+        # Mesmo criterio do filtro XPath acima: so auditoria de sucesso.
         $results = @(Get-EventLog -LogName Security -After $since -ErrorAction Stop |
-                     Where-Object { $ids -contains $_.EventID } |
+                     Where-Object { ($ids -contains $_.EventID) -and ($_.EntryType -eq 'SuccessAudit') } |
                      Select-Object -First $MaxEventsPerCycle)
     }
     return $results
@@ -357,6 +365,9 @@ function Convert-EventToRecord {
 
     $isWinEvent = $null -ne (Get-Member -InputObject $Ev -Name 'Id' -MemberType Properties -ErrorAction SilentlyContinue)
 
+    # Sucesso ou falha de auditoria, conferido de novo aqui alem do filtro da
+    # leitura (defesa em profundidade: ver o comentario do filtro XPath).
+    $success = $true
     if ($isWinEvent) {
         $id       = [int] $Ev.Id
         $when     = $Ev.TimeCreated
@@ -365,6 +376,11 @@ function Convert-EventToRecord {
         try { $props = @($Ev.Properties | ForEach-Object { [string] $_.Value }) } catch { $props = @() }
         $message  = ''
         try { $message = [string] $Ev.Message } catch { $message = '' }
+        try {
+            $kw = $Ev.Keywords
+            # 0x8020000000000000 cabe num Int64 negativo; o -band funciona igual.
+            if ($null -ne $kw) { $success = (([long] $kw) -band ([long] 9007199254740992)) -ne 0 }
+        } catch { $success = $true }
     } else {
         $id       = [int] $Ev.EventID
         $when     = $Ev.TimeGenerated
@@ -373,6 +389,7 @@ function Convert-EventToRecord {
         try { $props = @($Ev.ReplacementStrings) } catch { $props = @() }
         $message  = ''
         try { $message = [string] $Ev.Message } catch { $message = '' }
+        try { $success = ([string] $Ev.EntryType) -eq 'SuccessAudit' } catch { $success = $true }
     }
 
     $user     = ''
@@ -381,21 +398,25 @@ function Convert-EventToRecord {
     $computer = ''
     $type     = ''
     $logonType = ''
+    $kstatus  = ''
 
     switch ($id) {
         4768 {
-            # 4768: TargetUserName, TargetDomainName, ..., IpAddress
-            $user   = Get-Field $props 0 $message 'Nome da Conta|Account Name'
-            $domain = Get-Field $props 1 $message 'Dominio da Conta|Dom.nio da Conta|Account Domain'
-            $ip     = Get-IpField $props $message
-            $type   = 'logon'
+            # 4768: TargetUserName(0), TargetDomainName(1), ..., Status(6), ..., IpAddress(9)
+            $user    = Get-Field $props 0 $message 'Nome da Conta|Account Name'
+            $domain  = Get-Field $props 1 $message 'Dominio da Conta|Dom.nio da Conta|Account Domain'
+            $ip      = Get-IpField $props $message
+            $kstatus = Get-StatusField $props 6
+            $type    = 'logon'
         }
         4769 {
-            # 4769: TargetUserName (user@DOMINIO), TargetDomainName, ServiceName, ..., IpAddress
-            $user   = Get-Field $props 0 $message 'Nome da Conta|Account Name'
-            $domain = Get-Field $props 1 $message 'Dominio da Conta|Dom.nio da Conta|Account Domain'
-            $ip     = Get-IpField $props $message
-            $type   = 'activity'
+            # 4769: TargetUserName(0) (user@DOMINIO), TargetDomainName(1), ServiceName(2),
+            #       ..., IpAddress(6), IpPort(7), Status(8)
+            $user    = Get-Field $props 0 $message 'Nome da Conta|Account Name'
+            $domain  = Get-Field $props 1 $message 'Dominio da Conta|Dom.nio da Conta|Account Domain'
+            $ip      = Get-IpField $props $message
+            $kstatus = Get-StatusField $props 8
+            $type    = 'activity'
         }
         4624 {
             # 4624: ..., TargetUserName(5), TargetDomainName(6), ..., LogonType(8),
@@ -420,16 +441,31 @@ function Convert-EventToRecord {
     }
 
     return New-Object PSObject -Property @{
-        EventId   = $id
-        RecordId  = $recordId
-        Time      = $when
-        Type      = $type
-        User      = $user
-        Domain    = $domain
-        Ip        = $ip
-        Computer  = $computer
-        LogonType = $logonType
+        EventId        = $id
+        RecordId       = $recordId
+        Time           = $when
+        Type           = $type
+        User           = $user
+        Domain         = $domain
+        Ip             = $ip
+        Computer       = $computer
+        LogonType      = $logonType
+        Success        = $success
+        KerberosStatus = $kstatus
     }
+}
+
+# Le o codigo de resultado do Kerberos (0x0 = sucesso). So confia no valor se
+# ele tiver cara de codigo (0x...): se nesta versao do Windows o layout do
+# evento for outro, o indice pode cair em outro campo, e ai a checagem e
+# ignorada em vez de descartar eventos validos. A protecao principal contra
+# eventos de falha e o filtro de auditoria de sucesso; esta e uma segunda.
+function Get-StatusField {
+    param($Props, [int] $Index)
+    if ($null -eq $Props -or $Props.Count -le $Index) { return '' }
+    $v = ([string] $Props[$Index]).Trim()
+    if ($v -match '^0x[0-9a-fA-F]+$') { return $v.ToLower() }
+    return ''
 }
 
 # Pega um campo pelo indice nas propriedades; se nao der, tenta achar pelo
@@ -485,6 +521,11 @@ function Test-ShouldSend {
 
     if (-not $Rec.Type) { return $false }
     if (-not $Rec.User) { return $false }
+
+    # So autenticacao bem-sucedida. Ver o comentario do filtro XPath em
+    # Get-SecurityEvents: um evento de falha nao pode virar sessao.
+    if (-not $Rec.Success) { return $false }
+    if ($Rec.KerberosStatus -and ($Rec.KerberosStatus -ne '0x0')) { return $false }
 
     $u = $Rec.User.Trim()
     # Contas de maquina.

@@ -173,6 +173,9 @@ mv "$OUT/metadata"     "$TARDIR/metadata"
 mv "$OUT/plist"        "$TARDIR/plist"
 cp "$ROOT/build/install.sh" "$TARDIR/install.sh"
 chmod 0755 "$TARDIR/install.sh"
+# O roteiro de verificacao vai junto, para rodar no firewall logo apos instalar.
+cp "$ROOT/build/verify-on-pfsense.sh" "$TARDIR/verify-on-pfsense.sh"
+chmod 0755 "$TARDIR/verify-on-pfsense.sh"
 echo "$VERSION" > "$TARDIR/VERSION"
 
 [ -f "$ROOT/README.md" ] && cp "$ROOT/README.md" "$TARDIR/"
