@@ -62,19 +62,26 @@ func main() {
 	logger := newLogger(cfg)
 	logger.Printf("guaritad %s iniciando (config=%s)", Version, *cfgPath)
 
+	d := newDaemon(cfg, *cfgPath, logger, pftable.OSRunner{Pfctl: *pfctl})
+
+	if err := d.start(); err != nil {
+		logger.Printf("erro ao iniciar: %v", err)
+		os.Exit(1)
+	}
+
+	// O PID só é gravado depois que as portas foram abertas. No boot do
+	// pfSense 2.9.0 o serviço foi iniciado duas vezes no mesmo segundo; a
+	// segunda instância falha em "address already in use". Gravando antes,
+	// ela podia deixar no arquivo o PID dela, já morta (o os.Exit não roda os
+	// defer), e o SIGHUP de cada configuração salva ia para um processo que
+	// não existe: grupos e LDAP alterados na interface nunca chegavam ao
+	// serviço, sem erro nenhum.
 	if *pidFile != "" {
 		if err := os.WriteFile(*pidFile, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 			logger.Printf("aviso: não consegui gravar o PID em %s: %v", *pidFile, err)
 		} else {
 			defer os.Remove(*pidFile)
 		}
-	}
-
-	d := newDaemon(cfg, *cfgPath, logger, pftable.OSRunner{Pfctl: *pfctl})
-
-	if err := d.start(); err != nil {
-		logger.Printf("erro ao iniciar: %v", err)
-		os.Exit(1)
 	}
 
 	// Sinais: SIGHUP recarrega a configuração, SIGTERM/SIGINT encerram.

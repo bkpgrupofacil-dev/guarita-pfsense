@@ -351,8 +351,10 @@ foreach ($s as $x) {
 	echo "sessao: " . $x["ip"] . " " . $x["user"] . " grupos=" . implode(",", (array)$x["groups"]) . "\n";
 }
 ' > /tmp/v12.txt 2>&1
-grep -q "total=1" /tmp/v12.txt && ok "a sessao aparece na API usada pela interface" || bad "sessao nao listada"
-grep -q "grupos=teste" /tmp/v12.txt && ok "caiu no grupo padrao (sem LDAP configurado, como esperado)" \
+# Procura a sessao de teste pelo IP: num pfSense em uso ha sessoes reais alem
+# dela (antes o teste exigia "total=1" e falhava em qualquer firewall em uso).
+grep -q "sessao: $TEST_IP joao.teste" /tmp/v12.txt && ok "a sessao aparece na API usada pela interface" || bad "sessao nao listada"
+grep "sessao: $TEST_IP " /tmp/v12.txt | grep -q "grupos=teste" && ok "caiu no grupo padrao (o usuario de teste nao existe no AD)" \
 	|| bad "nao caiu no grupo padrao"
 sed 's/^/     /' /tmp/v12.txt
 
@@ -460,7 +462,21 @@ sockstat -4l 2>/dev/null | grep guaritad | grep -q "127.0.0.1:8924" \
 [ "$(table_count guarita_teste)" -gt 0 ] && ok "a sessao sobreviveu ao reinicio" \
 	|| bad "a tabela ficou vazia depois do reinicio"
 
-inf "18. desabilitar esvazia as tabelas"
+inf "18. segunda instancia nao estraga o arquivo de PID"
+# No boot do 2.9.0 o servico foi iniciado duas vezes no mesmo segundo. A
+# instancia que perde a porta tem de sair sem tocar no PID da que ficou: com o
+# PID errado, o SIGHUP de cada configuracao salva ia para um processo morto.
+LIVE=$(pgrep -x guaritad | head -1)
+/usr/local/sbin/guaritad -config /usr/local/pkg/guarita/guarita.json -pid /var/run/guaritad.pid >/dev/null 2>&1
+echo "     segunda instancia saiu com codigo $?"
+PIDF=$(cat /var/run/guaritad.pid 2>/dev/null | tr -d ' \n')
+echo "     instancia viva: $LIVE  arquivo de PID: $PIDF"
+[ -n "$LIVE" ] && [ "$PIDF" = "$LIVE" ] && ok "o arquivo de PID continua apontando para a instancia viva" \
+	|| bad "o arquivo de PID aponta para $PIDF, mas a instancia viva e $LIVE"
+[ "$(pgrep -x guaritad | wc -l | tr -d ' ')" = "1" ] && ok "so uma instancia rodando" \
+	|| bad "ha $(pgrep -x guaritad | wc -l | tr -d ' ') instancias rodando"
+
+inf "19. desabilitar esvazia as tabelas"
 # Desabilitado, o servico para e ninguem mais atualiza as tabelas. Se o filtro
 # nao for recarregado, os IPs das ultimas sessoes ficam nelas e as regras
 # continuam aplicando a politica de quem ja saiu.

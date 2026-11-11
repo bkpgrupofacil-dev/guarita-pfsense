@@ -42,6 +42,8 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | D1 logon restrito | ok | `leandrobloq` -> sessão no grupo `bloqueio` e 192.168.1.100 em `guarita_bloqueio`, até 1 min depois do logon |
 | D2 bloqueio | ok | Regra de teste no topo da LAN (block `guarita_bloqueio` -> `example.com`, com log): o site não abriu; 82 bloqueios de 192.168.1.100 no log do firewall |
 | D3 teste cruzado | ok | Mesma estação, logon com `leandroliberado`: às 17:20:00 o IP saiu de `guarita_bloqueio` e entrou em `guarita_liberado` no mesmo segundo, os bloqueios pararam e o site abriu. Regra de teste removida |
+| E1 reinício | ok, com ressalva | Reboot pelo sistema: a sessão `leandroliberado` foi restaurada do disco e o IP voltou a `guarita_liberado` 1 s depois de o serviço subir. Ressalva: o pfSense iniciou o serviço duas vezes no boot, e isso expôs o defeito 16 |
+| E2 recarga do filtro | ok | Salvar a configuração sem mudar o ruleset esvaziou a tabela, e ela foi reposta sozinha em cerca de 7 s, com "o filtro do pfSense foi recarregado; repondo as tabelas" (depende da correção do defeito 3) |
 | B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
@@ -222,6 +224,26 @@ depois de corrigir o anterior:
 - Teste que trava: casos novos em `build/test-agent.ps1` (13/13). Com o agente
   anterior: "nome da estacao vazio fica vazio: obtido 'Endereco da rede de
   origem: 192.168.1.100'".
+
+### 16. Uma segunda instância podia deixar o PID de um processo morto
+- Sintoma: no boot do 2.9.0 o serviço foi iniciado duas vezes no mesmo segundo;
+  a segunda instância falhou em "address already in use". O `verify` mostrou
+  que, depois disso, o arquivo de PID podia apontar para a instância morta.
+- Causa: o PID era gravado antes de abrir as portas. A instância que falhava
+  deixava o PID dela (o `os.Exit` não roda os `defer`), e o SIGHUP de cada
+  configuração salva ia para um processo inexistente: grupos e LDAP alterados na
+  interface nunca chegavam ao serviço, sem erro nenhum.
+- Correção: gravar o PID só depois que o serviço abriu as portas.
+- Teste que trava: passo 18 do verify (inicia uma segunda instância e exige o
+  PID da viva). Com o daemon anterior: "o arquivo de PID aponta para 31479, mas
+  a instancia viva e 25167".
+
+### 17. O verify falhava num pfSense com sessões reais
+- Sintoma: "sessao nao listada" no passo 12, com a sessão real de
+  `leandroliberado` ativa.
+- Causa: o passo exigia `total=1`.
+- Correção: procura a sessão de teste pelo IP. A sessão real foi preservada pela
+  restauração. Verify 43/43.
 
 ### Observação: a política leva até 1 minuto para mudar
 O daemon aplica na hora (o logon do D3 chegou às 17:20:00 e a tabela mudou no
