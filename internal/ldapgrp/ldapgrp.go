@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,7 +119,7 @@ func (r *Resolver) queryADGroups(cfg config.LDAP, user string) ([]string, error)
 		cfg.BaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(cfg.Timeout.D()/time.Second), false,
 		userFilter,
-		[]string{"distinguishedName", cfg.GroupAttr},
+		[]string{"distinguishedName", cfg.GroupAttr, "objectSid", "primaryGroupID"},
 		nil,
 	)
 	res, err := conn.Search(searchReq)
@@ -134,32 +135,77 @@ func (r *Resolver) queryADGroups(cfg config.LDAP, user string) ([]string, error)
 		userDN = entry.DN
 	}
 
-	var cns []string
-	if cfg.Nested {
-		// Busca grupos que contenham o usuário na cadeia de membros
-		// (LDAP_MATCHING_RULE_IN_CHAIN = 1.2.840.113556.1.4.1941).
-		groupFilter := fmt.Sprintf("(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=%s))",
-			ldap.EscapeFilter(userDN))
-		gReq := ldap.NewSearchRequest(
+	search := func(filter string) ([]*ldap.Entry, error) {
+		req := ldap.NewSearchRequest(
 			cfg.BaseDN,
 			ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(cfg.Timeout.D()/time.Second), false,
-			groupFilter,
-			[]string{"cn"},
+			filter,
+			[]string{"cn", "distinguishedName"},
 			nil,
 		)
-		gRes, err := conn.Search(gReq)
+		r, err := conn.Search(req)
+		if err != nil {
+			return nil, err
+		}
+		return r.Entries, nil
+	}
+	// inChain devolve os CNs dos grupos que contêm dn em qualquer nível
+	// (LDAP_MATCHING_RULE_IN_CHAIN = 1.2.840.113556.1.4.1941).
+	inChain := func(dn string) ([]string, error) {
+		es, err := search(fmt.Sprintf("(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=%s))",
+			ldap.EscapeFilter(dn)))
+		if err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, e := range es {
+			if cn := e.GetAttributeValue("cn"); cn != "" {
+				out = append(out, cn)
+			}
+		}
+		return out, nil
+	}
+
+	var cns []string
+	if cfg.Nested {
+		got, err := inChain(userDN)
 		if err != nil {
 			return nil, fmt.Errorf("ldap search nested groups: %w", err)
 		}
-		for _, e := range gRes.Entries {
-			if cn := e.GetAttributeValue("cn"); cn != "" {
-				cns = append(cns, cn)
-			}
-		}
+		cns = append(cns, got...)
 	} else {
 		for _, dn := range entry.GetAttributeValues(cfg.GroupAttr) {
 			if cn := firstCN(dn); cn != "" {
 				cns = append(cns, cn)
+			}
+		}
+	}
+
+	// Grupo primário: não aparece em memberOf nem em member (ver sid.go).
+	if rid, err := strconv.ParseUint(entry.GetAttributeValue("primaryGroupID"), 10, 32); err == nil && rid > 0 {
+		gsid, err := primaryGroupSID(entry.GetRawAttributeValue("objectSid"), uint32(rid))
+		if err != nil {
+			return nil, fmt.Errorf("grupo primário de %q: %w", user, err)
+		}
+		es, err := search(fmt.Sprintf("(&(objectClass=group)(objectSid=%s))", escapeBinary(gsid)))
+		if err != nil {
+			return nil, fmt.Errorf("ldap search primary group %s: %w", sidString(gsid), err)
+		}
+		if len(es) > 0 {
+			pg := es[0]
+			if cn := pg.GetAttributeValue("cn"); cn != "" {
+				cns = append(cns, cn)
+			}
+			if cfg.Nested {
+				pgDN := pg.GetAttributeValue("distinguishedName")
+				if pgDN == "" {
+					pgDN = pg.DN
+				}
+				got, err := inChain(pgDN)
+				if err != nil {
+					return nil, fmt.Errorf("ldap search nested groups of primary group: %w", err)
+				}
+				cns = append(cns, got...)
 			}
 		}
 	}

@@ -122,6 +122,23 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 - Correção: com o serviço parado, a restauração tira a sessão do arquivo de
   estado antes de religar o pacote, e no fim exige que ela não esteja lá.
 
+### 8. O grupo primário do usuário era ignorado
+- Sintoma: em Status > Testar um usuário, `leandroliberado` e `leandrobloq`
+  voltavam sem nenhum grupo do AD, embora estivessem em `liberado` e
+  `bloqueio`.
+- Causa: o administrador marcou esses grupos como **grupo primário** dos
+  usuários (`primaryGroupID` 1110 e 1111). O AD não lista o grupo primário no
+  `memberOf` do usuário nem no `member` do grupo, e a busca em cadeia
+  (`1.2.840.113556.1.4.1941`) também não o vê. Na produção isso pega todo
+  mundo: "Usuários do domínio" (RID 513) é o grupo primário de quase todos, e um
+  grupo do Guarita apontado para ele nunca casaria com ninguém.
+- Correção: o daemon lê `objectSid` e `primaryGroupID` do usuário, monta o SID do
+  grupo primário (SID do domínio + RID), busca o grupo por `objectSid` e, com
+  aninhados ligado, também os grupos que o contêm.
+- Teste que trava: `TestPrimaryGroupSID`, `TestPrimaryGroupSIDRejectsInvalid` e
+  `TestEscapeBinary` (Go). No AD real, depois da correção: `leandroliberado` ->
+  `liberado` e `leandrobloq` -> `bloqueio`.
+
 Os testes de `cmd/guaritad` não compilam no Windows (`log/syslog`): foram
 compilados para FreeBSD (`GOOS=freebsd go test -c`) e rodados dentro do pfSense.
 A versão foi para 0.1.2 para não haver dois builds diferentes com o número 0.1.1.
