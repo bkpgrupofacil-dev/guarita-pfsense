@@ -29,6 +29,9 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | A2 verify 0.1.2 | ok | 36/36 em duas rodadas seguidas; restauração ok e tabela de teste removida do pf |
 | A3 telas | **falhou**, corrigido | A aba Sessões quebrava o rodapé do pfSense e gerava "crash report". Ver defeito 4. Depois da correção: as 5 abas sem erro, `PHP_errors.log` sem linhas novas |
 | B1 servidor LDAP | ok | AD `dc01` (192.168.1.10:389), bind com conta comum; "Select a container" listou `CN=Users`, `OU=TESTE` e `OU=Domain Controllers`. O pfSense só habilita esse botão com o campo de containers já preenchido |
+| B3 grupos | ok | `liberado` (AD `liberado`, prio 0) e `bloqueio` (AD `bloqueio`, prio 10), salvos pela interface. Nome amigável "Bloqueio de Navegação": gravado em UTF-8 no `config.xml`, que continuou bem formado e sem `config.xml.bad`; chegou ao alias, ao JSON do daemon e à tela de Status |
+| B4 testar usuários | **falhou**, corrigido | Antes: os usuários voltavam sem grupo nenhum (defeito 8). Depois: `leandroliberado` -> `liberado`, `leandrobloq` -> `bloqueio`; `naoexiste` -> "não encontrado no AD" |
+| B5 grupo aninhado | ok | `leandro` em `interno`, que está em `liberado`. Aninhados ligado: AD `interno,liberado` -> `liberado`. Desligado: AD `interno` -> nenhum grupo do Guarita |
 | B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
