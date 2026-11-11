@@ -89,6 +89,18 @@ restore_config() {
 	/* Apaga a sessao de teste antes de restaurar, para o IP ficticio nao
 	 * acabar numa tabela de grupo real. */
 	guarita_remove_session("'"$TEST_IP"'");
+	/* Com o servico parado (o passo de desabilitar para o daemon), a API nao
+	 * responde e a sessao continuava no arquivo de estado: o daemon a
+	 * restaurava do disco no proximo inicio. Parado, o arquivo e so nosso. */
+	if (!guarita_is_running() && file_exists(GUARITA_STATE)) {
+		$st = json_decode(file_get_contents(GUARITA_STATE), true);
+		if (is_array($st)) {
+			$st = array_values(array_filter($st, function ($x) {
+				return ($x["ip"] ?? "") !== "'"$TEST_IP"'";
+			}));
+			file_put_contents(GUARITA_STATE, json_encode($st, JSON_PRETTY_PRINT));
+		}
+	}
 	$b = unserialize(file_get_contents("'"$BACKUP"'"));
 	if (!is_array($b)) { echo "  backup ilegivel; restaure manualmente\n"; exit(1); }
 	foreach (["settings" => "installedpackages/guarita",
@@ -115,6 +127,12 @@ restore_config() {
 		fi
 		echo "  tabela de teste removida do pf"
 	fi
+	# A sessao de teste nao pode sobrar, nem no disco nem no daemon.
+	if grep -q "\"$TEST_IP\"" /var/db/guarita/sessions.json 2>/dev/null; then
+		echo "  [FALHOU] a sessao de teste $TEST_IP ficou em /var/db/guarita/sessions.json"
+		exit 1
+	fi
+	echo "  sessao de teste removida"
 }
 trap restore_config EXIT
 trap 'exit 130' INT TERM
@@ -396,7 +414,53 @@ else
 	bad "/var/log/guarita.log nao existe"
 fi
 
-inf "16. desabilitar esvazia as tabelas"
+inf "16. servidor LDAP escolhido chega ao daemon"
+# "authserver" esta em listtags() do pfSense: lido do config.xml, o campo vira
+# array('nome'). Antes, auth_get_authserver() recebia o array e o LDAP ficava
+# sem host. O teste grava o campo, relê o config.xml do disco (como o pfSense
+# faz a cada requisicao) e confere o nome que o pacote enxerga.
+$PHP -r '
+require_once("config.inc");
+require_once("xmlparse.inc");
+require_once("/usr/local/pkg/guarita.inc");
+config_set_path("installedpackages/guarita/config/0/authserver", "servidor_de_teste");
+write_config("Guarita: verify testa o campo authserver");
+$fresh = parse_xml_config("/cf/conf/config.xml", "pfsense");
+$lido = $fresh["installedpackages"]["guarita"]["config"][0]["authserver"] ?? null;
+echo "tipo_lido=" . gettype($lido) . "\n";
+echo "nome=" . guarita_authserver_name(["authserver" => $lido]) . "\n";
+echo "nome_string=" . guarita_authserver_name(["authserver" => "x"]) . "\n";
+echo "nome_vazio=[" . guarita_authserver_name([]) . "]\n";
+' > /tmp/v16.txt 2>&1
+sed 's/^/     /' /tmp/v16.txt
+grep -q "nome=servidor_de_teste" /tmp/v16.txt && ok "o nome do servidor LDAP sobrevive a releitura do config.xml" \
+	|| bad "o nome do servidor LDAP se perde na releitura do config.xml"
+grep -q "nome_string=x" /tmp/v16.txt && grep -q "nome_vazio=\[\]" /tmp/v16.txt \
+	&& ok "texto e vazio tambem sao tratados" || bad "guarita_authserver_name com texto ou vazio"
+
+inf "17. mudar a porta de escuta reinicia o servico"
+# O SIGHUP nao reabre a porta. Antes, quem habilitava o pacote e depois escolhia
+# o IP da LAN ficava com o servico no endereco antigo.
+PID17=$(pgrep guaritad | head -1)
+$PHP -r '
+require_once("config.inc");
+require_once("/usr/local/pkg/guarita.inc");
+config_set_path("installedpackages/guarita/config/0/listen_port", "8924");
+write_config("Guarita: verify muda a porta de escuta");
+guarita_resync_config();
+' >/dev/null 2>&1
+i=0
+while ! sockstat -4l 2>/dev/null | grep guaritad | grep -q "127.0.0.1:8924" && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done
+sockstat -4l 2>/dev/null | grep guaritad | sed 's/^/     /'
+sockstat -4l 2>/dev/null | grep guaritad | grep -q "127.0.0.1:8924" \
+	&& ok "o servico passou a escutar em 127.0.0.1:8924 (em ${i}s)" \
+	|| bad "o servico NAO passou a escutar na porta nova"
+[ "$(pgrep guaritad | head -1)" != "$PID17" ] && ok "o servico foi reiniciado (pid $PID17 -> $(pgrep guaritad | head -1))" \
+	|| bad "o servico nao foi reiniciado"
+[ "$(table_count guarita_teste)" -gt 0 ] && ok "a sessao sobreviveu ao reinicio" \
+	|| bad "a tabela ficou vazia depois do reinicio"
+
+inf "18. desabilitar esvazia as tabelas"
 # Desabilitado, o servico para e ninguem mais atualiza as tabelas. Se o filtro
 # nao for recarregado, os IPs das ultimas sessoes ficam nelas e as regras
 # continuam aplicando a politica de quem ja saiu.

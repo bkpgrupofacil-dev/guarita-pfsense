@@ -42,6 +42,25 @@ function guarita_settings() {
 	return config_get_path('installedpackages/guarita/config/0', array());
 }
 
+/*
+ * guarita_authserver_name() devolve o nome do servidor LDAP escolhido.
+ *
+ * O campo se chama "authserver", e "authserver" está em listtags() do pfSense
+ * (é a lista de System > User Manager > Authentication Servers). O leitor do
+ * config.xml transforma TODA tag com esse nome numa lista, em qualquer lugar do
+ * arquivo. Então, gravado como <authserver>dc01</authserver>, o valor volta como
+ * array('dc01') na próxima leitura. Passar isso direto a auth_get_authserver()
+ * não acha servidor nenhum e o LDAP ficava sem host. O nome do campo fica, para
+ * não perder a configuração de quem já instalou.
+ */
+function guarita_authserver_name($s) {
+	$v = isset($s['authserver']) ? $s['authserver'] : '';
+	if (is_array($v)) {
+		$v = count($v) ? reset($v) : '';
+	}
+	return is_string($v) ? trim($v) : '';
+}
+
 /* Lê a lista de grupos configurados. */
 function guarita_groups() {
 	$rows = config_get_path('installedpackages/guaritagroups/config', array());
@@ -219,8 +238,9 @@ function guarita_write_config() {
 		'timeout'    => 10,
 	);
 
-	if (!empty($s['authserver'])) {
-		$auth = auth_get_authserver($s['authserver']);
+	$authname = guarita_authserver_name($s);
+	if ($authname !== '') {
+		$auth = auth_get_authserver($authname);
 		if (is_array($auth) && ($auth['type'] == 'ldap')) {
 			$ldap['host']      = $auth['host'];
 			$ldap['port']      = !empty($auth['ldap_port']) ? (int) $auth['ldap_port'] : 389;
@@ -490,6 +510,12 @@ function guarita_write_rcfile() {
 	));
 }
 
+/* Endereço de escuta gravado no JSON do daemon ('' se ainda não existe). */
+function guarita_json_listen() {
+	$j = @json_decode(@file_get_contents(GUARITA_JSON), true);
+	return (is_array($j) && isset($j['listen_agent'])) ? (string) $j['listen_agent'] : '';
+}
+
 /* Manda SIGHUP para o daemon recarregar a configuração sem perder as sessões. */
 function guarita_reload_service() {
 	if (!file_exists(GUARITA_PIDFILE)) {
@@ -609,6 +635,8 @@ function guarita_install() {
 function guarita_resync_config() {
 	guarita_write_rcfile();
 
+	/* Endereço de escuta em uso, para saber depois se ele mudou. */
+	$old_listen = guarita_json_listen();
 	if (!guarita_write_config()) {
 		return;
 	}
@@ -634,7 +662,16 @@ function guarita_resync_config() {
 		return;
 	}
 
-	if (guarita_is_running()) {
+	if (guarita_is_running() && ($old_listen !== guarita_json_listen())) {
+		/*
+		 * O SIGHUP recarrega grupos, LDAP e segredo, mas não reabre a porta:
+		 * o daemon só avisava "mudança de endereço de escuta exige reiniciar o
+		 * serviço" e seguia no endereço antigo. Quem habilitava o pacote e
+		 * depois escolhia o IP da LAN ficava com o serviço em *:8923. As
+		 * sessões sobrevivem ao reinício (ficam em disco).
+		 */
+		restart_service('guaritad');
+	} elseif (guarita_is_running()) {
 		/* Recarrega sem perder as sessões em andamento. */
 		guarita_reload_service();
 	} else {

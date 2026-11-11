@@ -29,7 +29,7 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 | A2 verify 0.1.2 | ok | 36/36 em duas rodadas seguidas; restauração ok e tabela de teste removida do pf |
 | A3 telas | **falhou**, corrigido | A aba Sessões quebrava o rodapé do pfSense e gerava "crash report". Ver defeito 4. Depois da correção: as 5 abas sem erro, `PHP_errors.log` sem linhas novas |
 | B1 servidor LDAP | ok | AD `dc01` (192.168.1.10:389), bind com conta comum; "Select a container" listou `CN=Users`, `OU=TESTE` e `OU=Domain Controllers`. O pfSense só habilita esse botão com o campo de containers já preenchido |
-| B2 configurações | ok | Habilitado, servidor `dc01`, escuta em 192.168.1.1:8923 |
+| B2 configurações | **falhou**, corrigido | Salvou, mas o daemon ficou sem LDAP (`host` vazio) e escutando em `*:8923`. Ver defeitos 5 e 6. Depois: LDAP 192.168.1.10 e escuta `192.168.1.1:8923`; verify 41/41 |
 
 ## Defeitos encontrados
 
@@ -88,6 +88,39 @@ O DC do laboratório já roda PowerShell 2.0, o mesmo motor do DC de produção
 - Teste que trava: `build/check-page-globals.sh`, chamado pelo `build.sh`, aborta
   o build se uma página usar `$g` ou `$config` como variável de laço ou atribuir
   a elas. Com as páginas antigas, ele aponta os 4 pontos e o build para.
+
+### 5. O servidor LDAP escolhido nunca chegava ao daemon
+- Sintoma: com o servidor `dc01` escolhido em Configurações, o `guarita.json`
+  saía com `"host": ""` e todo usuário caía em "LDAP não configurado".
+- Causa: o campo se chama `authserver`, e `authserver` está em `listtags()` do
+  pfSense (é a lista de Authentication Servers). O leitor do `config.xml`
+  transforma toda tag com esse nome em lista: `<authserver>dc01</authserver>`
+  volta como `array('dc01')`, e `auth_get_authserver()` com um array não acha
+  nada. O verify no 2.7.2 nunca configurou LDAP, então não pegou.
+- Correção: `guarita_authserver_name()` aceita texto ou lista. O nome do campo
+  ficou o mesmo, para não perder a configuração de quem já instalou.
+- Teste que trava: passo 16 do verify (grava o campo, relê o `config.xml` do
+  disco com `parse_xml_config()` e confere o nome).
+
+### 6. Mudar o endereço de escuta não tinha efeito
+- Sintoma: o daemon continuava em `*:8923` depois de salvar "Endereço de escuta =
+  192.168.1.1".
+- Causa: o `guarita.inc` só mandava SIGHUP, e o daemon não reabre a porta no
+  SIGHUP (ele mesmo registrava "mudança de endereço de escuta exige reiniciar o
+  serviço"). Quem habilitava primeiro e escolhia o IP depois ficava no endereço
+  antigo.
+- Correção: o resync compara o endereço no JSON antes e depois de gravar e, se
+  mudou, reinicia o serviço. As sessões sobrevivem (ficam em disco).
+- Teste que trava: passo 17 do verify (muda a porta e exige o serviço na porta
+  nova, com pid novo e a sessão preservada).
+
+### 7. O verify deixava a sessão de teste para trás (introduzido nesta sessão)
+- Sintoma: depois do verify, a sessão `192.168.99.50 joao.teste` voltava do disco
+  e aparecia em Sessões.
+- Causa: o passo de desabilitar (novo, do defeito 2) para o daemon antes da
+  restauração, e a restauração apagava a sessão pela API, que não respondia.
+- Correção: com o serviço parado, a restauração tira a sessão do arquivo de
+  estado antes de religar o pacote, e no fim exige que ela não esteja lá.
 
 Os testes de `cmd/guaritad` não compilam no Windows (`log/syslog`): foram
 compilados para FreeBSD (`GOOS=freebsd go test -c`) e rodados dentro do pfSense.
